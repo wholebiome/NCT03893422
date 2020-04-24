@@ -242,5 +242,8 @@ pPrimerFractionDetected
 ggsave("Figure2-qPCR-Fraction-Detected.png", 
        pPrimerFractionDetected, 
        width = 5, height = 7)
+ggsave("Figure2-qPCR-Fraction-Detected.pdf", 
+       pPrimerFractionDetected, 
+       width = 5, height = 7)
 ```
 
