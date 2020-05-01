@@ -15,8 +15,8 @@ The primary endpoints were safety, glucose AUC during meal tolerance test, and H
 ## Intervention/treatment
 
 1. Placebo
-2. WB-010
-3. WB-011
+2. WBF-010
+3. WBF-011
 
 ## Detailed Description
 
