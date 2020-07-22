@@ -5,10 +5,19 @@ Data-sharing repository for Randomized Clinical Trial
 conducted by [Pendulum Therapeutics](https://pendulum.co/)
 (FKA "Whole Biome, Inc.").
 
+For full details, see the peer-reviewed, open access article
+in [BMJ Diabetes Research and care](https://drc.bmj.com/content/8/1/e001319):
+
+> Improvements to postprandial glucose control in subjects with type 2 diabetes: a multicenter, double blind, randomized placebo-controlled trial of a novel probiotic formulation. 
+(2020) [8:e001319](https://drc.bmj.com/content/8/1/e001319). 
+doi: [10.1136/bmjdrc-2020-001319](https://doi.org/10.1136/bmjdrc-2020-001319)
+
+
 ## Brief Summary
 
 This 16 week placebo-controlled study evaluates the safety and impact of two medical probiotic study products, WBF-010 and WBF-011, consisting of commensal microbes and the dietary fiber, inulin. 
-The primary endpoints were safety, glucose AUC during meal tolerance test, and HbA1c.
+The primary endpoints were safety, CRP (inflammation), and change in total glucose AUC during meal tolerance test.
+Change in HbA1c was a secondary endpoint.
 
 **Disease: Type 2 Diabetes Mellitus**
 
