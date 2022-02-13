@@ -1,0 +1,296 @@
+---
+title: "WB01-202 Short Chain Fatty Acids via GC, Figure 3"
+author: "Pendulum Therapeutics, Inc."
+date: "`r Sys.Date()`"
+params:
+  fileTabScfa: "GC-SCFA-table.tsv"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r attempt-html-build-even-w-errors}
+knitr::opts_chunk$set(
+  error = TRUE, 
+  echo = TRUE, 
+  fig.width = 10, 
+  fig.height = 7)
+```
+
+## Parameters
+
+```{r}
+params
+```
+
+## Libraries
+
+```{r}
+library("data.table"); packageVersion("data.table")
+library("magrittr"); packageVersion("magrittr")
+library("ggplot2"); packageVersion("ggplot2")
+library("patchwork"); packageVersion("patchwork")
+library("ggbeeswarm"); packageVersion("ggbeeswarm")
+library("lubridate"); packageVersion("lubridate")
+theme_set(theme_bw())
+theme_set(
+  theme_bw(
+    base_size = 12,
+    base_family = "Arial"))
+```
+
+## Set themes, etc.
+
+```{r}
+theme_bw() %>% theme_set
+scaleColorManualTreatment <-
+  scale_color_manual(
+    values = 
+      c(
+        Placebo = "gray50",
+        `WBF-010` = "darkblue",
+        `WBF-011` = "darkgreen"
+      )
+  )
+scaleFillManualTreatment <-
+  scale_fill_manual(
+    values = 
+      c(
+        Placebo = "gray50",
+        `WBF-010` = "darkblue",
+        `WBF-011` = "darkgreen"
+      )
+  )
+```
+
+
+# Load Data
+
+```{r}
+tabScfa <- params$fileTabScfa %>% fread()
+```
+
+## Table for 3a
+
+```{r}
+tabFigure3a <-
+  tabScfa %>% 
+  .[!"2-ethylbutyrate", on = "Compound"] %>%
+  # Pivot-wide on compound
+  dcast.data.table(
+    formula = Treatment + Subject + 
+      EventName + Run + Batch + Round ~ Compound, 
+    value.var = "Concentration", 
+    fill = NA_real_) %>% 
+  # Compute within-round butyrate ratio
+  .[, .(
+    buOverScfa = butyrate / (acetate + butyrate + propionate)
+  ), by = .(Subject, Treatment, EventName, Run, Batch, Round)] %>%
+  # Pivot wide on timepoint for each round
+  dcast.data.table(
+    formula = Treatment + Subject + 
+      Run + Batch + Round ~ EventName, 
+    value.var = "buOverScfa", 
+    fill = NA_real_) %>% 
+  # Take log-ratio
+  .[, buOverScfaLogRatio := log10(`12_Week` / `00_Baseline`)] %>% 
+  # Aggregate technical replicates by taking median
+  .[, .(
+    buOverScfaLogRatio = median(buOverScfaLogRatio, na.rm = TRUE)
+  ), by = .(Treatment, Subject, Run, Batch)] %>%
+  # Aggregate by subject (in case replicates)
+  .[, .(
+    buOverScfaLogRatio = median(buOverScfaLogRatio, na.rm = TRUE)
+  ), by = .(Treatment, Subject)]
+```
+
+# Figure Panel A
+
+Compute butyrate ratio
+
+```{r, fig.width=2.5, fig.height=4}
+pFigure3a <-
+  tabFigure3a %>% copy %>% 
+  ggplot(aes(Treatment, buOverScfaLogRatio, 
+             shape = Treatment, color = Treatment)) + 
+  geom_hline(yintercept = 0, color = "black", size = 0.1) +
+  scaleColorManualTreatment +
+  geom_boxplot(
+    size = 0.25,
+    outlier.alpha = 0.0,
+    color = "gray35", 
+    width = 0.35) +
+  geom_point(
+    alpha = 0.7,
+    size = 1.5,
+    position = position_beeswarm(groupOnX = TRUE, cex = 3)) +
+  ggtitle("Log-ratio of butyrate fraction") +
+  theme(
+    title = element_text(size = 7),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = "none",
+    axis.text.x = element_text(size = 7),
+    axis.line.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_line(size = 0.1)
+  )
+pFigure3a
+ggsave("Figure3a.png", pFigure3a, width = 2.5, height = 4)
+```
+
+
+## Table for 3b
+
+Compute round-wise subject differences
+
+```{r}
+# pivot-wide on event, for each round list the Baseline and Week12 concentration
+tabSubjectChangeByMeasurement <-
+  tabScfa %>% unique %>% 
+  setorder(Compound, Run, Batch, Round, Subject, EventName) %>% 
+  .[, .(
+    Baseline = Concentration[(EventName == "00_Baseline")],
+    Week12 = Concentration[(EventName == "12_Week")]
+  ), 
+  by = .(Run, Compound, Batch, Round, 
+         Treatment, Subject)] %>% 
+  # Compute concentration differences
+  .[, ConcDifference := Week12 - Baseline] %>% 
+  .[, ConcDiffFraction := (Week12 - Baseline)/(0.5 * (Week12 + Baseline))] %>% 
+  .[, ConcLog10Ratio := log10(Week12/Baseline)] %>% 
+  setorder(Compound, Subject, Run)
+tabSubjectChangeByMeasurement %>% head(5)
+```
+
+Aggregate replicates of subject-wise change.
+
+```{r}
+tabFigure3bLong <-
+  tabSubjectChangeByMeasurement %>% 
+  .[!"2-ethylbutyrate", on = "Compound"] %>%
+  # First
+  # Aggregate the within-batch technical replicates (same vial, prep)
+  .[, .(
+    ConcDifference = median(ConcDifference, na.rm = TRUE),
+    ConcDiffFraction = median(ConcDiffFraction, na.rm = TRUE),
+    ConcLog10Ratio = median(ConcLog10Ratio, na.rm = TRUE)
+  ), by = .(Compound, Subject, Treatment, Run)] %>%
+  # Second
+  # Aggregate by subject (combine runs, batches)
+  .[, .(
+    ConcDifference = median(ConcDifference, na.rm = TRUE),
+    ConcDiffFraction = median(ConcDiffFraction, na.rm = TRUE),
+    ConcLog10Ratio = median(ConcLog10Ratio, na.rm = TRUE)
+  ), by = .(Compound, Treatment, Subject)]
+```
+
+```{r, fig.width=6, fig.height=4}
+pFigure3b <-
+  tabFigure3bLong %>% copy %>% 
+  .[!"2-ethylbutyrate", on = "Compound"] %>%
+  ggplot(aes(Treatment, ConcDifference, 
+             shape = Treatment, color = Treatment)) + 
+  # A manual emphasis on the origin
+  geom_hline(
+    yintercept = 0, 
+    size = 0.1, 
+    color = "black"
+  ) +
+  scaleColorManualTreatment +
+  facet_wrap(~Compound) +
+  scale_y_continuous(breaks = pretty) +
+  geom_boxplot(
+    size = 0.25,
+    outlier.alpha = 0.0,
+    color = "gray35", 
+    width = 0.35) +
+  geom_point(
+    alpha = 0.7,
+    size = 1,
+    position = position_beeswarm(groupOnX = TRUE, cex = 3)) +
+  theme(
+    title = element_text(size = 7),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = "none",
+    axis.line.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 7),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_line(size = 0.1)
+  ) +
+  ggtitle("Subject-wise change in SCFA concentration [mM]")
+pFigure3b
+ggsave("Figure3b.png", pFigure3b, width = 6, height = 4)
+```
+
+```{r, fig.width=6, fig.height=4}
+pFigure3b <-
+  tabFigure3bLong %>% copy %>% 
+  .[!"2-ethylbutyrate", on = "Compound"] %>%
+  ggplot(aes(Treatment, ConcDifference, 
+             shape = Treatment, color = Treatment)) + 
+  # A manual emphasis on the origin
+  geom_hline(
+    yintercept = 0, 
+    size = 0.1, 
+    color = "black"
+  ) +
+  scaleColorManualTreatment +
+  facet_wrap(~Compound, scales = "free_y") +
+  scale_y_continuous(breaks = pretty) +
+  geom_boxplot(
+    size = 0.25,
+    outlier.alpha = 0.0,
+    color = "gray35", 
+    width = 0.35) +
+  geom_point(
+    alpha = 0.7,
+    size = 1,
+    position = position_beeswarm(groupOnX = TRUE, cex = 3)) +
+  theme(
+    title = element_text(size = 7),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = "none",
+    axis.line.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 7),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_line(size = 0.1)
+  ) +
+  ggtitle("Subject-wise change in SCFA concentration [mM]")
+pFigure3b
+ggsave("Figure3b-scalesfreepanels.png", pFigure3b, width = 6, height = 4)
+```
+
+
+# Render final figure image
+
+```{r}
+pFigure3 <- NULL
+pFigure3 <-
+  pFigure3a +
+  pFigure3b +
+  plot_layout(ncol = 2, widths = c(1, 3.5)) +
+  plot_annotation(tag_levels = 'A')
+pFigure3
+ggsave("Figure3.pdf", pFigure3, width = 8, height = 4)
+```
+
+
+
+

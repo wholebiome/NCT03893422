@@ -1,0 +1,249 @@
+---
+title: "WB01-202 Manuscript Figures qPCR"
+author: "Pendulum Therapeutics"
+date: "`r Sys.Date()`"
+params:
+  fileTabRxn: "qPCR-reaction-table.tsv"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+editor_options: 
+  chunk_output_type: console
+---
+
+
+# Preliminaries
+
+```{r}
+knitr::opts_chunk$set(
+  fig.width = 10, 
+  fig.height = 7,
+  error = TRUE, 
+  echo = TRUE, 
+  include = TRUE, 
+  message = TRUE, 
+  warning = TRUE)
+dateStamp <- gsub("[[:punct:][:space:]]", "-", Sys.time())
+message(dateStamp)
+```
+
+## Load required libraries
+
+```{r}
+library("data.table"); packageVersion("data.table")
+library("magrittr"); packageVersion("magrittr")
+library("lubridate"); packageVersion("lubridate")
+library("ggplot2"); packageVersion("ggplot2")
+```
+
+## Set themes, etc.
+
+```{r}
+theme_bw() %>% theme_set
+scaleColorManualTreatment <-
+  scale_color_manual(
+    values = 
+      c(
+        Placebo = "gray50",
+        `WBF-010` = "darkblue",
+        `WBF-011` = "darkgreen"
+      )
+  )
+scaleFillManualTreatment <-
+  scale_fill_manual(
+    values = 
+      c(
+        Placebo = "gray50",
+        `WBF-010` = "darkblue",
+        `WBF-011` = "darkgreen"
+      )
+  )
+```
+
+Define theme no-gaps
+
+```{r}
+themeNoGaps <-
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.margin = margin(t = 0, unit='cm'),
+    legend.box.spacing = unit(0, units = "lines"),
+    legend.box.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "pt"),
+    strip.text.y = element_text(angle = 0),
+    panel.spacing = unit(0, units = "pt"),
+    panel.grid.major = element_blank()
+  )
+```
+
+
+# Load data
+
+```{r}
+tabRxn <- 
+  params$fileTabRxn %>% 
+  fread(stringsAsFactors = FALSE)
+# Enforce `Week` is a padded string for even spacing in the figure.
+tabRxn$Week <-
+  stringr::str_pad(
+    string = tabRxn$Week,
+    width = 2,
+    side = "left",
+    pad = "0")
+```
+
+
+# Figure 2 fraction detected
+
+```{r, fig.width=5, fig.height=7}
+tabRxn$Primers %>% unique %>% sort
+tabRxn %>% 
+  # Define simply by whether detected at all.
+  .[, .(
+    Fraction = (PassFilter %>% as.logical %>% sum)/.N
+  ), 
+  by = .(Treatment, Week, Strain, Primers)] %>% 
+  setorder(Treatment, Strain, Primers, Week) %>% 
+  ggplot(
+    mapping = aes(
+      x = Week, 
+      y = Fraction, 
+      color = Treatment,
+      fill = Treatment,
+      shape = Primers
+    )
+  ) +
+  scale_shape_manual(
+    values = 
+      c(
+        AMUC_AT = 21, 
+        BINF_AY = 21, 
+        CBEI_AB = 21, 
+        CBEI_AK = 24, 
+        CBUT_AS = 21, 
+        EHAL_AH = 21, 
+        EHAL_AN = 24)
+  ) +
+  geom_path(
+    size = 0.25,
+    mapping = aes(group = Primers)
+  ) +
+  geom_point() +
+  scaleColorManualTreatment +
+  scaleFillManualTreatment +
+  guides(colour = "none", fill = "none") +
+  facet_grid(Strain ~ Treatment) +
+  xlab("Weeks in study") +
+  ylab("Fraction of reactions") +
+  ggtitle("Detection of strains via qPCR") +
+  theme(
+    # http://www.cookbook-r.com/Graphs/Fonts/
+    # axis.text.y = element_text(family = "Courier"),
+    legend.position = "bottom",
+    # legend.direction = "vertical",
+    # legend.margin = margin(t = 0, unit='cm'),
+    legend.box.spacing = unit(0, units = "lines"),
+    legend.box.margin = margin(t = 0, r = 0, b = 0, l = 0, unit = "pt"),
+    panel.grid.minor = element_blank(),
+    strip.text.y = element_text(angle = 0),
+    # plot.margin = unit(c(-0.1, 0, -0.2, 0), "cm"),
+    panel.spacing = unit(0, units = "pt"),
+    axis.ticks.x=element_blank(),
+    panel.grid.major.x = element_blank()
+  )
+```
+
+
+```{r, fig.width=5, fig.height=7}
+tabSubjectFraction <- 
+  tabRxn %>% 
+  # Define simply by whether detected at all, by subject
+  .[, .(AnyPassFilter = sum(PassFilter) > 1),
+    by = .(Treatment, Week, Strain, Primers, Subject)] %>% 
+  .[, .(
+    Fraction = (AnyPassFilter %>% as.logical %>% sum)/.N
+  ), 
+  by = .(Treatment, Week, Strain, Primers)] %>% 
+  .[, 
+    placeboMaxFrac := max(Fraction[(Treatment == "Placebo")]), 
+    by = "Strain"] %>% 
+  setorder(Treatment, Strain, Primers, Week)
+pPrimerFractionDetected <-
+  tabSubjectFraction %>% copy %>% 
+  ggplot(
+    mapping = aes(
+      x = Week, 
+      y = Fraction, 
+      color = Treatment,
+      fill = Treatment,
+      shape = Primers
+    )
+  ) +
+  # Define each primers shape explicitly
+  scale_shape_manual(
+    values = 
+      c(
+        AMUC_AT = 21, 
+        BINF_AY = 21, 
+        CBEI_AB = 21, 
+        CBEI_AK = 24, 
+        CBUT_AS = 21, 
+        EHAL_AH = 21, 
+        EHAL_AN = 24)
+  ) +
+  geom_rect(
+    fill = "gray",
+    color = NA,
+    alpha = 0.25,
+    mapping = aes(xmin = -Inf, xmax = Inf, 
+                  ymin = 0, ymax = placeboMaxFrac), 
+    data = tabSubjectFraction[, .SD[1], by = .(Strain, Treatment)]
+  ) +
+  geom_path(
+    data = tabSubjectFraction %>% copy %>% 
+      setorder(Treatment, Strain, Primers, Week),
+    size = 0.25,
+    mapping = aes(group = Primers)
+  ) +
+  geom_point() +
+  scaleColorManualTreatment +
+  scaleFillManualTreatment +
+  guides(colour = "none", fill = "none") +
+  facet_grid(Strain ~ Treatment) +
+  xlab("Weeks in study") +
+  ylab("Fraction of Subjects") +
+  ggtitle("Detection of strains via qPCR") +
+  theme(
+    plot.title = element_blank(),
+    axis.title = element_text(size = 11),
+    panel.spacing.y = unit(10, units = "pt"),
+    panel.spacing.x = unit(5, units = "pt"),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    strip.text.y = element_text(angle = 0),
+    strip.text.x = element_text(size = 12),
+    strip.background.x = element_rect(fill = NA, color = NA),
+    strip.background.y = element_rect(fill = NA),
+    # http://www.cookbook-r.com/Graphs/Fonts/
+    # axis.text.y = element_text(family = "Courier"),
+    legend.position = "right",
+    # legend.direction = "vertical",
+    legend.margin = margin(t = 0, unit='cm'),
+    legend.box.spacing = unit(0, units = "lines"),
+    legend.box.margin = margin(t = 0, r = 0, b = 0, l = 2, unit = "pt"),
+    # plot.margin = unit(c(-0.1, 0, -0.2, 0), "cm"),
+    # panel.spacing = unit(0, units = "pt"),
+    axis.ticks = element_blank()
+  )
+pPrimerFractionDetected
+ggsave("Figure2-qPCR-Fraction-Detected.png", 
+       pPrimerFractionDetected, 
+       width = 5, height = 7)
+ggsave("Figure2-qPCR-Fraction-Detected.pdf", 
+       pPrimerFractionDetected, 
+       width = 5, height = 7)
+```
+

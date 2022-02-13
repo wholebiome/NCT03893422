@@ -1,0 +1,1140 @@
+---
+title: "Figure 03 Bile Acids"
+author: "Paul J. McMurdie"
+date: '`r format(Sys.Date(), "%Y-%B-%d")`'
+output: rmdformats::readthedown
+params:
+  tabMetabolonUntgtWilcox: "../tidy_data/tabMetabolonUntgtWilcox.RDS"
+  tabPlasmaMsOmicsBileAcidsLong: "../tidy_data/tabPlasmaMsOmicsBileAcidsLong.RDS"
+  tabStrainCultureMsOmicsBileAcids: "../tidy_data/tabStrainCultureMsOmicsBileAcids.RDS"
+  tabStrainCultureMetabolonPivWideType: "../tidy_data/tabStrainCultureMetabolonPivWideType.RDS"
+  tabStrainCultureMetabolon: "../tidy_data/tabStrainCultureMetabolon.RDS"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  error = TRUE, 
+  echo = TRUE, 
+  fig.width = 10, 
+  fig.height = 7)
+```
+
+```{r}
+library("magrittr")
+library("data.table")
+library("ggplot2"); packageVersion("ggplot2")
+library("patchwork"); packageVersion("patchwork")
+library("ggbeeswarm"); packageVersion("ggbeeswarm")
+```
+
+```{r}
+theme_set(
+  theme_bw() +
+    theme(
+      panel.grid = element_blank(), 
+      axis.ticks = element_line(size = 0.25),
+      strip.background = element_blank(),
+      strip.text.y = element_text(angle = 0)
+    )
+)
+scaleColorManualTreatment <-
+  scale_color_manual(
+    values = 
+      c(
+        placebo = "gray50",
+        wbf10 = "darkblue",
+        wbf11 = "darkgreen"
+      )
+  )
+scaleFillManualTreatment <-
+  scale_fill_manual(
+    values = 
+      c(
+        placebo = "gray50",
+        wbf10 = "darkblue",
+        wbf11 = "darkgreen"
+      )
+  )
+studyArmPretty <- 
+  c(placebo = "Placebo", 
+    wbf10 = "WBF-010", 
+    wbf11 = "WBF-011")
+scaleColorTreatmentManPretty <-
+  scale_color_manual(
+    values = 
+      c(
+        "Placebo" = "gray50",
+        "WBF-010" = "darkblue",
+        "WBF-011" = "darkgreen"
+      )
+  )
+scaleFillTreatmentManPretty <-
+  scale_fill_manual(
+    values = 
+      c(
+        "Placebo" = "gray50",
+        "WBF-010" = "darkblue",
+        "WBF-011" = "darkgreen"
+      )
+  )
+showBileAcids <- c(
+  "Cholic acid" = "CA", 
+  "Chenodeoxycholic acid" = "CDCA", 
+  "Ursodeoxycholic acid" = "UDCA")
+```
+
+
+# Load data
+
+```{r}
+# Targeted plasma bile acids
+tabPlasmaMsOmicsBileAcidsLong <- readRDS(params$tabPlasmaMsOmicsBileAcidsLong)
+# "negative" concentration should be set to LoD to avoid logic error
+tabPlasmaMsOmicsBileAcidsLong[(Concentration < 0.0), Concentration := LOD]
+# Untargeted metabolites change stats (to show the plasma bile acids)
+tabMetabolonUntgtWilcox <- readRDS(params$tabMetabolonUntgtWilcox)
+```
+
+
+# Fig. 3a Untargeted Bile Acids
+
+Plasma untargeted bile acids summary
+
+```{r}
+# This is both the inclusion set and order it appears in the plots
+showConjuFams <- c("UDCA", "CDCA", "CA", "DCA", "LCA")
+# Force reset
+pBileAcidUntgt <- tabBileAcidUntgt <- NULL
+## Untargeted bile acid table
+tabBileAcidUntgt <- 
+  tabMetabolonUntgtWilcox %>% copy %>% 
+  # Show the bile acids result in bile-acid figure, omit here to save figure space
+  .[(subPathway == "Bile Acids")]
+# Standardize nomenclature
+tabBileAcidUntgt[, Molecule := copy(BIOCHEMICAL)]
+tabBileAcidUntgt[, Molecule := gsub("late", "lic acid", Molecule)]
+# Define conjugate families
+tabBileAcidUntgt[, ConjugateFamily := "Other"]
+tabBileAcidUntgt[grep("^([Tt]auro|[Gg]lyco)*[Cc]holic acid", Molecule), 
+                 ConjugateFamily := "CA"]
+tabBileAcidUntgt[grep("^([Z7]-)*([Kk]eto|[Tt]auro|[Gg]lyco)*[Dd]eoxycholic acid", Molecule), 
+                 ConjugateFamily := "DCA"]
+tabBileAcidUntgt[grep("^([Tt]auro|[Gg]lyco)*[Cc]hen(o)*deoxycholic acid", Molecule), 
+                 ConjugateFamily := "CDCA"]
+tabBileAcidUntgt[grep("^([Ii]so)*([Tt]auro|[Gg]lyco)*[Uu]rsodeoxycholic acid", Molecule), 
+                 ConjugateFamily := "UDCA"]
+tabBileAcidUntgt[grep("[lL]ithocholic acid", Molecule), 
+                 ConjugateFamily := "LCA"]
+tabBileAcidUntgt[grep("[Hh]yocholic acid", Molecule), 
+                 ConjugateFamily := "HCA"]
+tabBileAcidUntgt[grep("[Hh]yodeoxycholic acid", Molecule), 
+                 ConjugateFamily := "HDCA"]
+tabBileAcidUntgt[grep("muri", Molecule, ignore.case = TRUE), 
+                 ConjugateFamily := "MCA"]
+tabBileAcidUntgt[, OrderBA := "Z"]
+tabBileAcidUntgt[(ConjugateFamily %in% c("CA", "CDCA", "HCA")), OrderBA := "Primary"]
+tabBileAcidUntgt[(ConjugateFamily %in% c("DCA", "LCA", "UDCA")), OrderBA := "Secondary"]
+tabBileAcidUntgt[grep("(keto|iso)", Molecule, ignore.case = TRUE), OrderBA := "Secondary"]
+
+# Upper-case-ify
+tabBileAcidUntgt$Molecule <-
+  tabBileAcidUntgt$Molecule %>% 
+  Hmisc::capitalize()
+
+# Define sort order based on WBF-011
+orderUntgtMetabs <- 
+  tabBileAcidUntgt %>% 
+  .[(treatment == "wbf11")] %>% 
+  setorder(-estimateWinGrp) %>% 
+  .$Molecule
+tabBileAcidUntgt[, metaboFactor := factor(Molecule, levels = orderUntgtMetabs)]
+```
+
+Define base plot
+
+```{r fig.width=14}
+pBileAcidUntgt <-
+  tabBileAcidUntgt %>% copy %>% 
+  .[(ConjugateFamily %in% showConjuFams)] %>% 
+  .[, conjuFam := factor(ConjugateFamily, levels = showConjuFams)] %>% 
+  # .[(pBwGrp < 0.05)] %>%
+  ggplot(aes(metaboFactor, estimateWinGrp, color = treatment, fill = treatment)) +
+  geom_hline(yintercept = 0.0, size = 0.1) +
+  facet_wrap(
+    facets = ~conjuFam, nrow = 1,
+    scales = "free_x", shrink = TRUE, drop = TRUE,
+    strip.position = "top") +
+  # Adding this has the effect of centering each panel
+  geom_blank(mapping = aes(ymin = -confIntLo, ymax = -confIntHi)) +
+  # The (within-group) log2-ratio + C.I.s
+  geom_pointrange(
+    alpha = 1.0,
+    size = 0.5,
+    fatten = 3,
+    shape = 23,
+    stroke = 0.1,
+    position = position_dodge(width = 0.6),
+    mapping = aes(ymin = confIntLo, ymax = confIntHi)
+  ) +
+  ylab(
+    expression(paste(
+      log[2](over(Endpoint,Baseline))
+    ))) +
+  # xlab("")
+  scaleColorManualTreatment +
+  scaleFillManualTreatment +
+  ggtitle("Plasma, untargeted") +
+  theme(
+    legend.position = "none",
+    panel.grid = element_blank(),
+    axis.ticks = element_blank(),
+    axis.ticks.x = element_line(size = 0.25),
+    # strip.text = element_blank(),
+    strip.background = element_blank(),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(
+      size = 10,
+      angle = 30, 
+      hjust = 1, 
+      vjust = 1))
+pBileAcidUntgt
+
+## Show UDCA precursors statistics in WBF-011
+tabBileAcidUntgt %>% 
+  .[grep("^(Glyco)*[Ll]ithocholic acid$", Molecule)] %>% 
+  rbind(., 
+        (tabBileAcidUntgt %>% 
+           .[grep("^(Glyco)*[Cc]henodeoxycholic acid$", Molecule)])
+  ) %>% 
+  .[, .(Molecule, treatment, pBwGrp, estimateWinGrp, pWinGrp)] %>% 
+  setorder(-pWinGrp) %>% 
+  knitr::kable(digits = 2)
+
+## Simplified, untargeted plasma bile acid changes
+## Trim down to the less-exotic 
+## (and usually higher concentration) molecules
+filterStringBileAcids <- "(tauro|keto|iso|sulfate|glucuronide)"
+pBileAcidUntgt$data <-
+  pBileAcidUntgt$data[grep(filterStringBileAcids, Molecule, 
+                           ignore.case = TRUE, invert = TRUE)]
+pBileAcidUntgt
+
+## Table
+## Summarize key differences in a table.
+pBileAcidUntgt$data[(pBwGrp < 0.05)][(pWinGrp < 0.1)][(treatment == "wbf11")]
+# Define withing group marking symbol
+pBileAcidUntgt$data[, symbolWinGrp := ""]
+pBileAcidUntgt$data[(pBwGrp < 0.05 & pWinGrp < 0.1), symbolWinGrp := "."]
+pBileAcidUntgt$data[(pBwGrp < 0.05 & pWinGrp < 0.05), symbolWinGrp := "*"]
+# Define between-group (bracket) symbol
+pBileAcidUntgt$data[, symbolBwGrp := ""]
+pBileAcidUntgt$data[(pBwGrp < 0.05 & pWinGrp < 0.1 & treatment == "wbf11"), symbolBwGrp := "*"]
+pBileAcidUntgt$data %>% 
+  .[(pBwGrp < 0.05 & pWinGrp < 0.1)] %>% 
+  .[, .(Molecule, ConjugateFamily, estimateWinGrp, pWinGrp, pBwGrp, symbolWinGrp)] %>% 
+  knitr::kable(digits = 3)
+
+## Add brackets
+tabBileAcidUntgtBrkt <- NULL
+tabBileAcidUntgtBrkt <- 
+  pBileAcidUntgt$data %>% copy %>% 
+  .[(pBwGrp < 0.05 & pWinGrp < 0.1)] %>% 
+  .[, xpos := .I]
+pBileAcidUntgt <-
+  pBileAcidUntgt +
+  # Bw-grp bracket
+  ggpubr::geom_bracket(
+    mapping = aes(
+      y.position = confIntHi, 
+      label = symbolBwGrp, 
+      xmin = xpos - 0.2,
+      xmax = xpos + 0.2),
+    tip.length = c(0.2, 0.02),
+    bracket.nudge.y = 0.4,
+    color = "black",
+    vjust = 0.3, 
+    hjust = 0.5,
+    data = tabBileAcidUntgtBrkt,
+    label.size = 4,
+  ) +
+  # Within-group nominal stat sig
+  geom_text(
+    data = tabBileAcidUntgtBrkt,
+    nudge_y = 0.1,
+    mapping = aes(label = symbolWinGrp, y = confIntHi, x = xpos + 0.2)
+  )
+pBileAcidUntgt
+```
+
+
+
+# Fig. 3b Targeted Bile Acids
+
+## Event-Wide Table
+
+Compute subject-wise Week12, Baseline paired metrics
+
+```{r}
+loopAndIndicatorVars <- 
+  c("treatment", "quantCategory", "detectCategory",
+    "OrderBA", "ConjugateFamily", "Molecule")
+formulaPivotEventWide <-
+  loopAndIndicatorVars %>% 
+  c("Subject", .) %>% 
+  paste(collapse = " + ") %>% 
+  paste0(" ~ Event", collapse = "") %>% 
+  as.formula()
+
+tabPlasmaTgtBileAcidsEventWide <- NULL
+tabPlasmaTgtBileAcidsEventWide <-
+  tabPlasmaMsOmicsBileAcidsLong %>%
+  # pivot wide to ensure consistent handling of subject-event-sample and missing
+  dcast.data.table(
+    formula = formulaPivotEventWide,
+    # formula = Treatment + Subject + 
+    #   detectCategory + quantCategory + 
+    #   ConjugateFamily + Molecule ~ Event, 
+    fill = NA, 
+    fun.aggregate = mean,
+    value.var = "Concentration")
+# How many different quantitative-accuracy bile acids were measured?
+tabPlasmaTgtBileAcidsEventWide %>% 
+  .[(quantCategory == "absolut")] %>% 
+  .$Molecule %>% 
+  unique() %>% 
+  sort()
+
+# Define concise table of Dummy values, set to LoD
+tabLoDMsOmics <-
+  tabPlasmaMsOmicsBileAcidsLong %>% 
+  .[, .(Molecule, LOD)] %>% 
+  unique()
+# Add LoD back to each entry in 'wide' table
+tabPlasmaTgtBileAcidsEventWide <- 
+  tabLoDMsOmics[tabPlasmaTgtBileAcidsEventWide, on = "Molecule"]
+tabPlasmaTgtBileAcidsEventWide[(Baseline < LOD), Baseline := LOD]
+tabPlasmaTgtBileAcidsEventWide[(Week12 < LOD), Week12 := LOD]
+# Compute change statistics
+tabPlasmaTgtBileAcidsEventWide <-
+  tabPlasmaTgtBileAcidsEventWide %>% 
+  .[, Week12MinusBaseline := Week12 - Baseline]
+
+## Test, "Delta": Week12 - Baseline
+tabPlasmaTgtBileAcidsEventWide %>% 
+  .[is.infinite(Week12MinusBaseline)] %>% 
+  nrow()
+tabPlasmaTgtBaWinGrp <- NULL
+tabPlasmaTgtBaWinGrp <-
+  tabPlasmaTgtBileAcidsEventWide %>% 
+  .[, .(
+    wilcoxOut = list(
+      wilcox.test(
+        x = Week12MinusBaseline, 
+        alternative = "two.sided",
+        conf.int = TRUE,
+        mu = 0.0, 
+        paired = FALSE)
+    )
+  ), 
+  by = loopAndIndicatorVars]
+# Extract key results from test
+extract_wi = function(wilcoxOut){data.table(
+  pvalue = wilcoxOut$p.value,
+  statistic = wilcoxOut$statistic,
+  estimate = wilcoxOut$estimate,
+  confIntLo = wilcoxOut$conf.int[1],
+  confIntHi = wilcoxOut$conf.int[2]
+)}
+tabPlasmaTgtBaWinGrp <-
+  tabPlasmaTgtBaWinGrp[, extract_wi(wilcoxOut[[1]]), 
+                                   by = loopAndIndicatorVars]
+setorder(tabPlasmaTgtBaWinGrp, -pvalue, treatment)
+
+## Between-Group: WBF-011 v. Placebo
+# Compute wilcoxon
+tabPlasmaTgtBaBwGrp <- NULL
+# Compute the between-group comparison WBF-011 v. Placebo
+tabPlasmaTgtBaBwGrp <-
+  tabPlasmaTgtBileAcidsEventWide %>% 
+  # .[(numNonMissing > 0)] %>% 
+  # .[(numNonzeroLogRatio > thresholdMinNonzeroLogRatios)] %>%
+  .[(treatment %in% c("wbf11", "placebo"))] %>% 
+  .[, .(
+    wilcoxOut = list(
+      try(expr = {
+        wilcox.test(
+          x = Week12MinusBaseline[(treatment == "wbf11")],
+          y = Week12MinusBaseline[(treatment == "placebo")],
+          alternative = "greater",
+          conf.int = TRUE,
+          paired = FALSE)
+      }, silent = TRUE)
+    )
+  ), 
+  by = c(loopAndIndicatorVars[-1])]
+# Extract key results from test
+extract_wi = function(wilcoxOut){
+  data.table(
+    pvalue = wilcoxOut$p.value,
+    statistic = wilcoxOut$statistic,
+    estimate = wilcoxOut$estimate,
+    confIntLo = wilcoxOut$conf.int[1],
+    confIntHi = wilcoxOut$conf.int[2]
+  )
+}
+# Check that test didn't fail and return non-sense (missing or funky data)
+tabPlasmaTgtBaBwGrp[, success := inherits(wilcoxOut[[1]], "htest"), 
+                           by = c(loopAndIndicatorVars[-1])]
+tabPlasmaTgtBaBwGrp <-
+  tabPlasmaTgtBaBwGrp %>% 
+  .[(success), try({extract_wi(wilcoxOut[[1]])}, silent = TRUE), 
+    by = c(loopAndIndicatorVars[-1])]
+setorder(tabPlasmaTgtBaBwGrp, -pvalue)
+tabPlasmaTgtBaBwGrp %>% .[(quantCategory == "absolut")] %>% .[(pvalue < 0.25)] %>% tail(10)
+# Join the two comparison tables (within- and between-group)
+setnames(tabPlasmaTgtBaWinGrp, "pvalue", "pWinGrp")
+setnames(tabPlasmaTgtBaWinGrp, "estimate", "estimateWinGrp")
+setnames(tabPlasmaTgtBaBwGrp, "pvalue", "pBwGrp")
+setnames(tabPlasmaTgtBaBwGrp, "estimate", "estimateBwGrp")
+tabPlasmaTgtWilcox <-
+  (tabPlasmaTgtBaBwGrp %>% 
+     .[, .(Molecule, estimateBwGrp, pBwGrp)]) %>% 
+  .[tabPlasmaTgtBaWinGrp, on = "Molecule"] %>% 
+  copy()
+```
+
+Show UDCA precursors statistics in WBF-011
+
+```{r}
+tabPlasmaTgtWilcox %>% 
+  .[grep("^(Glyco)*[Ll]ithocholic acid$", Molecule)] %>% 
+  .[(quantCategory == "absolut")] %>% 
+  rbind(., 
+        (tabPlasmaTgtWilcox %>% 
+           .[grep("^(Glyco)*[Cc]henodeoxycholic acid$", Molecule)])
+  ) %>% 
+  .[, .(Molecule, treatment, pBwGrp, estimateWinGrp, pWinGrp)] %>% 
+  setorder(-pWinGrp) %>% 
+  knitr::kable(digits = 2)
+```
+
+Define plotting order, organization.
+
+```{r}
+# Define molecule order based on significance results 
+showOrder <- showSet <- NULL
+showSet <- 
+  tabPlasmaTgtBaBwGrp %>% copy %>% 
+  .[(quantCategory == "absolut")] %>% 
+  # Select the groups to show in main plot
+  .[(ConjugateFamily %in% showConjuFams)] %>% 
+  # .[(pvalue < 0.5)] %>%
+  .$Molecule
+# Define order of labels (a grouping)
+showOrder <- 
+  tabPlasmaTgtWilcox %>% copy %>% 
+  .[showSet, on = "Molecule"] %>% 
+  .[(treatment == "wbf11")] %>% 
+  setorder(-estimateWinGrp) %>% 
+  .$Molecule
+```
+
+Targeted Summary, Delta
+
+```{r}
+# Define table for plot
+tabPlasmaTargetedBasePlot <-
+  tabPlasmaTgtWilcox %>% copy %>% 
+  .[showSet, on = "Molecule"] %>% 
+  # Make order match the untargeted results, via orderUntgtMetabs
+  .[, bileAcids := factor(Molecule, 
+                          levels = c(orderUntgtMetabs, "Lithocholic acid"))] %>%
+  .[, conjuFam := factor(ConjugateFamily, levels = showConjuFams)]
+
+# Define plot
+pPlasmaTargetedBase <-
+  tabPlasmaTargetedBasePlot %>% 
+  ggplot(aes(x = bileAcids, y = estimateWinGrp)) +
+  # facet_grid(ConjugateFamily ~ ., scales = "free") +
+  facet_wrap(~conjuFam, scales = "free", nrow = 1) +
+  geom_hline(yintercept = 0.0, size = 0.1) +
+  geom_blank(mapping = aes(ymin = -confIntLo, ymax = -confIntHi)) +
+  geom_pointrange(
+    position = position_dodge(width = 0.6),
+    alpha = 1.0,
+    size = 0.5,
+    fatten = 3,
+    shape = 23,
+    stroke = 0.1,
+    mapping = aes(
+      fill = treatment,
+      color = treatment,
+      ymin = confIntLo, 
+      ymax = confIntHi
+    )
+  ) +
+  scaleColorManualTreatment +
+  scaleFillManualTreatment +
+  # coord_flip() +
+  ylab("\u0394 Concentration [\u03BCM]") +
+  ggtitle("Plasma, targeted") +
+  theme(
+    legend.position = "none",
+    panel.grid = element_blank(),
+    axis.ticks.x = element_line(size = 0.25),
+    # panel.border = element_blank(),
+    strip.background = element_blank(),
+    axis.title.y = element_text(size = 14, angle = 90, vjust = 0.5),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(
+      size = 10,
+      angle = 30, 
+      hjust = 1, 
+      vjust = 1))
+pPlasmaTargetedBase
+
+## Simplified, targeted plasma bile acid changes
+## Trim down to the less-exotic 
+## (and usually higher concentration) molecules
+pPlasmaTargetedBase$data <-
+  pPlasmaTargetedBase$data[grep(filterStringBileAcids, Molecule, 
+                                ignore.case = TRUE, invert = TRUE)]
+pPlasmaTargetedBase
+
+## Table
+## Summarize key differences in a table.
+pPlasmaTargetedBase$data[(pBwGrp < 0.15)][(pWinGrp < 0.3)][(estimateWinGrp > 0.0)]
+# Define withing group marking symbol
+pPlasmaTargetedBase$data[, symbolWinGrp := ""]
+pPlasmaTargetedBase$data[(pBwGrp < 0.15 & pWinGrp < 0.3 & estimateWinGrp > 0.0), symbolWinGrp := "."]
+# pPlasmaTargetedBase$data[(pBwGrp < 0.05 & pWinGrp < 0.05), symbolWinGrp := "*"]
+# Define between-group (bracket) symbol
+pPlasmaTargetedBase$data[, symbolBwGrp := ""]
+pPlasmaTargetedBase$data[(pBwGrp < 0.15 & pWinGrp < 0.3 & 
+                            estimateWinGrp > 0.0 & 
+                            treatment == "wbf11"), symbolBwGrp := "."]
+pPlasmaTargetedBase$data %>% 
+  .[(pBwGrp < 0.15 & pWinGrp < 0.3 & 
+       estimateWinGrp > 0.0)] %>% 
+  .[, .(Molecule, ConjugateFamily, estimateWinGrp, pWinGrp, pBwGrp, symbolWinGrp)] %>% 
+  knitr::kable(digits = 3)
+
+## Add brackets
+tabBileAcidTgtBrkt <- NULL
+tabBileAcidTgtBrkt <- 
+  pPlasmaTargetedBase$data %>% copy %>% 
+  .[(symbolBwGrp != "")] %>% 
+  .[, xpos := .I]
+pPlasmaTargeted <-
+  pPlasmaTargetedBase +
+  # Bw-grp bracket
+  ggpubr::geom_bracket(
+    mapping = aes(
+      y.position = confIntHi, 
+      label = symbolBwGrp, 
+      xmin = xpos - 0.2,
+      xmax = xpos + 0.2),
+    tip.length = c(0.2, 0.1),
+    bracket.nudge.y = 0.04,
+    color = "black",
+    vjust = 0.15, 
+    hjust = 0.5,
+    data = tabBileAcidTgtBrkt,
+    label.size = 6,
+  ) +
+  # Within-group nominal stat sig
+  # (nothing: within-group sig weaker than the untargeted log-ratio data)
+  geom_text(
+    data = tabBileAcidTgtBrkt[(pWinGrp < 0.1)],
+    nudge_y = 0.01,
+    mapping = aes(
+      color = treatment,
+      label = symbolWinGrp, 
+      y = confIntHi, 
+      x = xpos + 0.2)
+  )
+pPlasmaTargeted
+```
+
+
+# Fig. 3c Total bile acids
+
+For completeness, sum up total bile acids,
+show whether it is within healthy range for all subjects.
+
+- Annotated the reference ranges.
+- Annotate the medians within group, and grand at each timepoint.
+
+```{r}
+studyArmDodgeWidth = 0.8
+thresholdMaxTotalPlot = 15
+
+tabShowBileAcids <- pPlasmaTotalBileAcids <- NULL
+tabShowBileAcids <- 
+  tabPlasmaMsOmicsBileAcidsLong %>% copy %>% 
+  .[(
+    detectCategory == "Final results" &
+      quantCategory == "absolut")] %>% 
+  .[, .(totalBileAcids = sum(Concentration, na.rm = TRUE)), 
+    by = .(treatment, Subject, Event)] %>% 
+  .[, Treatment := studyArmPretty[treatment]]
+tabPlotTotalBileAcids <-
+  tabShowBileAcids %>% copy %>% 
+  .[(totalBileAcids > thresholdMaxTotalPlot),
+    totalBileAcids := Inf]
+pPlasmaTotalBileAcids <- 
+  tabPlotTotalBileAcids %>% 
+  ggplot(aes(Treatment, totalBileAcids, color = Treatment, fill = Treatment)) +
+  facet_wrap(~Event, strip.position = "top") +
+  # Normal range, 0 - 10 uM
+  # Moderate cholestasis ~10 - 40 uM
+  geom_rect(
+    data = data.frame(Treatment = "dummy", Subject = "SS"),
+    color = NA,
+    fill = "darkred",
+    alpha = 0.15,
+    inherit.aes = FALSE,
+    xmin = -Inf, 
+    xmax = Inf,
+    ymin = 10,
+    ymax = Inf
+  ) +
+  # severe cholestasis
+  # >= 40 uM
+  # (not shown)
+  #
+  # Baseline grand median
+  geom_hline(
+    yintercept = tabPlotTotalBileAcids[(Event == "Baseline")] %>% 
+      .$totalBileAcids %>% 
+      median(),
+    size = 0.25,
+    linetype = 1,
+    alpha = 0.65,
+  ) +
+  geom_beeswarm(
+    data = tabPlotTotalBileAcids[is.finite(totalBileAcids)],
+    shape = 21,
+    dodge.width = studyArmDodgeWidth,
+    # mapping = aes(color = Treatment, fill = Treatment),
+    groupOnX = TRUE,
+    cex = 3.5,
+    size = 1,
+    stroke = 0.1,
+    alpha = 0.75
+  ) +
+  # Annotate any points that get off the top of the screen
+  ggrepel::geom_text_repel(
+    position = position_dodge(width = studyArmDodgeWidth),
+    data = tabShowBileAcids[(totalBileAcids > thresholdMaxTotalPlot)], 
+    mapping = aes(
+      y = Inf, 
+      label = round(totalBileAcids, digits = 1)
+    ),
+    min.segment.length = 0,
+    size = 2
+  ) +
+  # group-median crossbar
+  stat_summary(
+    geom = "crossbar",
+    fatten = 1.3,
+    width = 0.5,
+    position = position_dodge(width = studyArmDodgeWidth),
+    fun.data = function(x){
+      thisMedian = median(x, na.rm = TRUE)
+      return(
+        data.frame(
+          y = thisMedian,
+          ymin = thisMedian,
+          ymax = thisMedian
+        )
+      )
+    }) +
+  scaleColorTreatmentManPretty +
+  scaleFillTreatmentManPretty +
+  guides(
+    color = guide_legend(title="Study Arm")
+  ) +
+  ylab("Total bile acids [\u03BCM]") +
+  theme(
+    panel.grid = element_blank(),
+    axis.title.x = element_blank(),
+    axis.ticks.x = element_line(size = 0.25),
+    axis.text.x = element_text(angle = 30, size = 8, hjust = 1),
+    legend.position = "none"
+  )
+pPlasmaTotalBileAcids
+```
+
+
+# Fig. 3e Monoculture $\Delta$ Bile Acids
+
+## Load data
+
+```{r}
+tabStrainCultureMsOmicsBileAcids <-
+  readRDS(params$tabStrainCultureMsOmicsBileAcids)
+```
+
+Check NIC
+
+```{r}
+tabStrainCultureMsOmicsBileAcids %>% 
+  .[(inoculated == "FALSE")] %>% 
+  .[(sampleType == "supernatant")] %>% 
+  .[(quantCategory == "absolut")] %>% 
+  ggplot(aes(timepoint, Concentration, color = ConjugateFamily)) +
+  facet_grid(cols = vars(moleculeAdded), rows = vars(run)) +
+  geom_hline(yintercept = 50, linetype = 3, size = 0.25) +
+  geom_point() +
+  theme(axis.ticks.y = element_line(size = 0.25)) +
+  ggtitle("NIC only", "Looks good. No changes. Confirms design.")
+```
+
+Check growth-typical conditions (no added bile acids) controls.
+(note: this control was not included in CBUT run)
+
+```{r}
+tabStrainCultureMsOmicsBileAcids %>% copy %>% 
+  .[(Condition == "GrowthCtl")] %>% 
+  .[(sampleType == "supernatant")] %>% 
+  .[(quantCategory == "absolut")] %>% 
+  ggplot(aes(timepoint, Concentration, color = ConjugateFamily)) +
+  facet_grid(cols = vars(Strain)) +
+  ylim(0, 50) +
+  geom_path(mapping = aes(group = paste(Condition, Molecule))) +
+  geom_point() +
+  theme(
+    axis.ticks.y = element_line(size = 0.25), 
+    legend.position = "bottom") +
+  ggtitle("Control: No primary bile acids amended", 
+          "Minimal changes, low concentrations. Confirms design.")
+```
+
+Note: Should include only "absolut" concentration values in the figure-of-merit.
+
+## Effective volume, umoles
+
+Compute the effective-volume that combines
+the cell pellet and supernatant measurements at `t_final`.
+
+```{r}
+tabMonocultureDeltaSummary <-
+  tabStrainCultureMsOmicsBileAcids %>% copy %>%
+  .[(inoculated == "TRUE")] %>%
+  .[(Condition != "GrowthCtl")] %>% 
+  .[(media == "pyg")] %>% 
+  .[(quantCategory == "absolut")] %>% 
+  # This sums together cell-pellet and supernatant at t_final,
+  # on both micromoles and effective_volume values
+  dcast.data.table(
+    formula = inoculated + moleculeAdded + Strain +
+      Condition +
+      ConjugateFamily + OrderBA + Molecule ~ timepoint,
+    value.var = c("micromoles", "effectiveVolume"),
+    fun.aggregate = sum,
+    na.rm = TRUE
+  ) %>%
+  # Compute effective concentrations at zero, final
+  .[, conc0 := (1000 * micromoles_T0 / effectiveVolume_T0)] %>%
+  .[, concf := (1000 * micromoles_Tfinal / effectiveVolume_Tfinal)] %>%
+  # Deltas
+  .[, deltaMicroMoles := micromoles_Tfinal -  micromoles_T0] %>%
+  .[, deltaConc := concf - conc0]
+```
+
+Show each timepoint separately.
+
+```{r}
+tabPlotBothTimepoints <- 
+  tabStrainCultureMsOmicsBileAcids %>% 
+  .[!is.na(Strain)] %>% 
+  .[(inoculated == "TRUE")] %>%
+  .[(Condition != "GrowthCtl")] %>% 
+  .[(media == "pyg")] %>% 
+  .[(quantCategory == "absolut")] %>% 
+  # Sum
+  .[, .(micromoles = sum(micromoles)), 
+    by = .(Strain, moleculeAdded, Condition, 
+           ConjugateFamily, Molecule, timepoint)]
+# Only show molecules that have micromoles > threshold
+showMolecules <- tabPlotBothTimepoints[(micromoles > 1e-3)]$Molecule %>% unique()
+tabPlotBothTimepoints %>% 
+  .[showMolecules, on = "Molecule"] %>% 
+  ggplot(aes(timepoint, micromoles, 
+             # shape = sampleType,
+             color = ConjugateFamily)) +
+  facet_grid(
+    cols = vars(moleculeAdded), 
+    rows = vars(Strain)) +
+  geom_path(mapping = aes(group = paste(Strain, Condition, Molecule))) +
+  geom_point() +
+  ggtitle("Inoculated only", "Replicates similar. Confirms design.")
+```
+
+Summarize as effective concentration deltas.
+
+only `abs(\u0394) > 1\u03BCM"`
+
+CBUT monoculture main bile acid changes
+following growth in rich media amended with
+CA, CDCA, or sterile water (control)
+
+```{r}
+pMonocultureDeltaSummary <- NULL
+strainOrder <- c("CBUT", "EHAL", "CBEI", "AMUC", "BINF")
+tabDeltaSummary <-
+  tabMonocultureDeltaSummary %>% copy %>% 
+  .[(Molecule %in% names(showBileAcids))] %>%
+  # Pretty plotting
+  .[, Amendment := paste0("+50 \u03BCM ", moleculeAdded)] %>% 
+  # Omit the vanishing trace bile acids from this plot
+  .[showMolecules, on = "Molecule", nomatch = 0] %>% 
+  # set factor to order the stain facets
+  .[, strainFac := factor(Strain, levels = strainOrder)] %>% 
+  # limit negative-delta outlier effect on plot limits
+  .[(deltaConc < -75), deltaConc := -Inf]
+pMonocultureDeltaSummary <-
+  tabDeltaSummary %>% 
+  .[!is.na(Strain)] %>% 
+  ggplot(
+    mapping = aes(
+      x = Molecule, 
+      y = deltaConc, 
+      color = OrderBA, 
+      fill = OrderBA)
+  ) +
+  scale_y_continuous(breaks = c(-50, -25, 0, 25)) +
+  facet_grid(
+    rows = vars(Amendment), 
+    cols = vars(strainFac)
+  ) +
+  geom_hline(yintercept = 0.0, size = 0.25, color = "black") +
+  # The bars
+  stat_summary(
+    width = 0.5,
+    alpha = 0.7,
+    geom = "col",
+    color = NA,
+    fun.data = function(x){
+      data.frame(y = median(x))
+    }) +
+  # The individual replicate values
+  geom_point(
+    size = 1.5,
+    stroke = 0,
+    alpha = 0.7,
+    position = position_beeswarm(cex = 2.5, groupOnX = TRUE)
+  ) +
+  guides(
+    colour = guide_legend("Bile Acid Rank"), 
+    fill = guide_legend("Bile Acid Rank")) +
+  scale_color_brewer(palette = "Set1") +
+  scale_fill_brewer(palette = "Set1") +
+  # scale_y_continuous(breaks = c(-40, -20, 0, 20)) +
+  ylab("\u0394 Concentration [\u03BCM]") +
+  # ggtitle("\u0394 Concentration [\u03BCM]") +
+  theme(
+    plot.title = element_blank(),
+    strip.text.x = element_text(size = 12),
+    strip.text.y = element_text(size = 10, hjust = 0),
+    legend.position = "none",
+    panel.grid.major.y = element_line(size = 0.1, color = "gray"),
+    axis.ticks = element_blank(),
+    axis.title.y = element_text(size = 12),
+    axis.text.x = element_text(angle = 30, hjust = 1, size = 10),
+    axis.title.x = element_blank(),
+  ) 
+# pMonocultureDeltaSummary
+```
+
+## Fig. 3e Monoculture $\Delta$ Summary
+
+```{r}
+pMonocultureDeltaSummary
+```
+
+For plot, make a version that only shows 
+the targeted assay positive confirmation (CBUT).
+Can leave as "data not shown" for now for the others,
+since they are all UDCA-negligible.
+
+```{r}
+pMonocultureDeltaSummaryCbutOnly <- copy(pMonocultureDeltaSummary)
+pMonocultureDeltaSummaryCbutOnly$data <-
+  pMonocultureDeltaSummary$data[(Strain == "CBUT")] %>% 
+  copy()
+# Flip the facet grid for better vertical space usage
+pMonocultureDeltaSummaryCbutOnly <- 
+  pMonocultureDeltaSummaryCbutOnly +
+  facet_grid(
+    cols = vars(Amendment), 
+    rows = vars(strainFac)
+  )
+pMonocultureDeltaSummaryCbutOnly
+```
+
+
+
+# Fig. 3d Strain Culture Pilot, Metabolon
+
+Strain culture rich media + primary bile acids (CA + CDCA) pilot.
+Metabolon untargeted data.
+
+- 50 uM CA amended
+- 50 uM CDCA amended
+- No bile acid amendment for AMUC
+
+```{r}
+tabStrainCultureMetabolonPivWideType <- 
+  # Uses Metabolon `OrigScale` rather than the rescaled, imputed values.
+  # Has benefit of explicit missing values, and consistent peak-area relationship
+  readRDS(params$tabStrainCultureMetabolonPivWideType)
+tabStrainCultureMetabolon <- 
+  readRDS(params$tabStrainCultureMetabolon)
+# Subset to bile acids on the 'sampletype wide' table
+vecBileAcidIds <- 
+  tabStrainCultureMetabolon[grep("Bile", `SUB PATHWAY`)] %>% 
+  .$COMP_ID %>% unique()
+# Define bile acids table
+tabStrainCultureMetabolonBileAcids <- NULL
+tabStrainCultureMetabolonBileAcids <-
+  tabStrainCultureMetabolonPivWideType %>% copy %>% 
+  .[vecBileAcidIds, on = "COMP_ID"] %>% 
+  # One is a very small value on this `OrigScale` scale
+  .[is.na(CellPellet), CellPellet := 1.0] %>% 
+  .[is.na(BlankMedia), BlankMedia := 1.0] %>% 
+  .[is.na(Supernatant), Supernatant := 1.0] %>% 
+  # Compute log-ratios
+  .[, CpOverBlank := log10(CellPellet / BlankMedia)] %>% 
+  .[, SuOverBlank := log10(Supernatant / BlankMedia)] %>% 
+  # Melt (pivot long) so that can be combined
+  melt.data.table(
+    id.vars = c("COMP_ID", "Strain"), 
+    measure.vars = c("CpOverBlank", "SuOverBlank"),
+    variable.name = "SampleType", 
+    value.name = "log10Ratio") %>% 
+  .[, SampleType := gsub("SuOverBlank", "Supernatant", SampleType)] %>% 
+  .[, SampleType := gsub("CpOverBlank", "CellPellet", SampleType)]
+
+tabStrainCultureMetabolonBileAcids <-
+  tabStrainCultureMetabolonBileAcids %>% 
+  # Add back annotations
+  (tabStrainCultureMetabolon %>%
+     .[, .(COMP_ID, BIOCHEMICAL, `SUPER PATHWAY`, `SUB PATHWAY`,
+           MASS, CAS, KEGG, `Group HMDB`)] %>%
+     unique())[., on = "COMP_ID", nomatch = 0]
+# Standardize nomenclature, and categorize conjugate family
+tabStrainCultureMetabolonBileAcids[, Molecule := copy(BIOCHEMICAL)]
+tabStrainCultureMetabolonBileAcids[, Molecule := gsub("late", "lic acid", Molecule)]
+tabStrainCultureMetabolonBileAcids[, ConjugateFamily := "Other"]
+# Define conjugate families
+tabStrainCultureMetabolonBileAcids[grep("^([Tt]auro|[Gg]lyco)*(3-dehydro)*[Cc]holic acid", Molecule), 
+                                   ConjugateFamily := "CA"]
+tabStrainCultureMetabolonBileAcids[grep("^([Z7]-)*([Kk]eto|[Tt]auro|[Gg]lyco)*[Dd]eoxycholic acid", Molecule), 
+                                   ConjugateFamily := "DCA"]
+tabStrainCultureMetabolonBileAcids[grep("^([Tt]auro|[Gg]lyco)*(3-dehydro)*[Cc]hen(o)*deoxycholic acid", Molecule), 
+                                   ConjugateFamily := "CDCA"]
+tabStrainCultureMetabolonBileAcids[grep("^([Ii]so)*([Tt]auro|[Gg]lyco)*[Uu]rsodeoxycholic acid", Molecule), 
+                                   ConjugateFamily := "UDCA"]
+tabStrainCultureMetabolonBileAcids[grep("^([Tt]auro|[Gg]lyco)*[Uu]rsocholic acid", Molecule),
+                                   ConjugateFamily := "UCA"]
+tabStrainCultureMetabolonBileAcids[grep("[lL]ithocholic acid", Molecule), 
+                                   ConjugateFamily := "LCA"]
+tabStrainCultureMetabolonBileAcids[grep("[Hh]yocholic acid", Molecule), 
+                                   ConjugateFamily := "HCA"]
+tabStrainCultureMetabolonBileAcids[grep("[Hh]yodeoxycholic acid", Molecule), 
+                                   ConjugateFamily := "HDCA"]
+tabStrainCultureMetabolonBileAcids[grep("muri", Molecule, ignore.case = TRUE), 
+                                   ConjugateFamily := "MCA"]
+tabStrainCultureMetabolonBileAcids[, OrderBA := "Z"]
+tabStrainCultureMetabolonBileAcids[(ConjugateFamily %in% c("CA", "CDCA", "HCA")), 
+                                   OrderBA := "Primary"]
+tabStrainCultureMetabolonBileAcids[(ConjugateFamily %in% 
+                                      c("DCA", "LCA", "UDCA", "UCA", "HDCA")), 
+                                   OrderBA := "Secondary"]
+tabStrainCultureMetabolonBileAcids[grep("(keto|iso)", Molecule, ignore.case = TRUE), 
+                                   OrderBA := "Secondary"]
+# For interpretive organization, it helps to group these together, last
+tabStrainCultureMetabolonBileAcids[grep("3-dehydro", Molecule),
+                                   ConjugateFamily := "z3dehydro"]
+tabStrainCultureMetabolonBileAcids[grep("3-dehydro", Molecule),
+                                   OrderBA := "Secondary"]
+
+# Upper-case-ify
+tabStrainCultureMetabolonBileAcids$Molecule <-
+  tabStrainCultureMetabolonBileAcids$Molecule %>% 
+  Hmisc::capitalize()
+
+# Define order of metabolites
+orderStrainCultureMetabolonBileAcids <-
+  tabStrainCultureMetabolonBileAcids %>% 
+  .[, .(OrderBA, ConjugateFamily, Molecule)] %>% 
+  unique() %>% 
+  setorder(-OrderBA, -ConjugateFamily, -Molecule) %>% 
+  # show()
+  .$Molecule
+
+# Define strain culture pilot summary heatmap
+pStrainCultureMetabolonBileAcids <-
+  tabStrainCultureMetabolonBileAcids %>% copy %>% 
+  .[, MoleculeFac := factor(Molecule, 
+                            levels = orderStrainCultureMetabolonBileAcids)] %>% 
+  .[, SampleTypePretty := c(CellPellet = "Cell Pellet", 
+                            Supernatant = "Supernatant")[SampleType]] %>% 
+  ggplot(aes(SampleTypePretty, MoleculeFac, fill = log10Ratio)) +
+  # facet_grid(ConjugateFamily ~ Strain, shrink = FALSE, drop = TRUE, scales = "free") +
+  facet_grid( ~ Strain, shrink = FALSE, drop = TRUE, scales = "free") +
+  geom_raster() +
+  scale_fill_gradient2() +
+  # Adjust the color mapping legend
+  guides(
+    fill = guide_colourbar(
+      title = expression(paste(
+        log[10](over(Specimen,Medium))
+      )),
+      # nbin = 5, 
+      barwidth = 13, 
+      barheight = 0.5)
+  ) +
+  theme(
+    legend.position = "bottom",
+    legend.justification = "left",
+    legend.title = element_text(size = 8, vjust = 0.2),
+    axis.title = element_blank(),
+    axis.text.x = element_text(angle = 30, size = 10, hjust = 1)
+  )
+pStrainCultureMetabolonBileAcids
+
+pStrainCultureMetabolonBileAcids$data <- 
+  # Drop AMUC, because no primary bile acids amended
+  pStrainCultureMetabolonBileAcids$data %>% 
+  .[(Strain != "AMUC")]
+pStrainCultureMetabolonBileAcids
+```
+
+
+# Build Figure 3
+
+```{r pFig3, fig.height=7, fig.width=6.7}
+fig2Layout <- "
+AAAAAAAA#
+BBBBBBBCC
+DDDD##EEE
+"
+sizeAxisTitles <- 7
+sizeAxisText <- 6
+pFig3 <- NULL
+pFig3 <-
+  # Untargeted, Log-Ratio
+  (
+    pBileAcidUntgt + 
+      theme(
+        panel.spacing = unit(8, "pt"),
+        axis.ticks.y = element_line(size = 0.25),
+        plot.title =  element_text(size = sizeAxisTitles),
+        strip.text = element_text(size = sizeAxisTitles),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size = sizeAxisText),
+        axis.text.y = element_text(size = sizeAxisText),
+        axis.title.y = element_text(
+          size = sizeAxisTitles, angle = 0, vjust = 0.5,
+          margin = margin(r = -100, unit = "pt"))
+      )
+  ) +
+  # Targeted, Delta
+  (
+    pPlasmaTargeted + 
+      theme(
+        panel.spacing = unit(1, "pt"),
+        plot.title =  element_text(size = sizeAxisTitles),
+        strip.text = element_text(size = sizeAxisTitles),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size = sizeAxisText),
+        axis.text.y = element_text(size = sizeAxisText),
+        axis.title.y = element_text(
+          size = sizeAxisTitles, angle = 90, vjust = 0.5,
+          margin = margin(r = -100, unit = "pt"))
+      )
+  ) +
+  # Targeted, total bile acids
+  (pPlasmaTotalBileAcids + 
+     theme(
+       panel.spacing = unit(1, "pt"),
+       plot.margin = margin(0, unit='pt'),
+       plot.title =  element_text(size = sizeAxisTitles),
+       strip.text = element_text(size = sizeAxisTitles),
+       axis.title.x = element_blank(),
+       axis.title.y = element_text(size = sizeAxisTitles),
+       axis.text.x = element_text(size = sizeAxisText),
+       axis.text.y = element_text(size = sizeAxisText)
+     )
+  ) +
+  # In vitro monoculture pilot summary heatmap
+  (
+    pStrainCultureMetabolonBileAcids +
+      # Adjust the color mapping legend
+      guides(
+        fill = guide_colourbar(
+          title = expression(paste(
+            log[10](over(Specimen,Medium))
+          )),
+          barwidth = 10, 
+          barheight = 0.5)
+      ) +
+      theme(
+        panel.spacing = unit(1, "pt"),
+        plot.title =  element_text(size = sizeAxisTitles),
+        strip.text = element_text(size = sizeAxisTitles),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.x = element_text(size = sizeAxisText),
+        axis.text.y = element_text(size = sizeAxisText),
+        legend.text = element_text(size = sizeAxisText), 
+        legend.title = element_text(size = sizeAxisText, vjust = 0.2),
+        legend.margin = margin(l = -80, r = 200, t = -25, unit='pt')
+      )
+  ) +
+  (pMonocultureDeltaSummaryCbutOnly + 
+     theme(
+       plot.margin = margin(0, unit='pt'),
+       axis.ticks.y = element_line(size = 0.25),
+       axis.ticks.x = element_line(size = 0.25),
+       plot.title = element_blank(),
+       strip.text.x = element_text(size = sizeAxisTitles),
+       strip.text.y = element_text(size = sizeAxisTitles),
+       axis.title.x = element_blank(),
+       axis.title.y = element_text(size = sizeAxisTitles),
+       axis.text.x = element_text(size = sizeAxisText),
+       axis.text.y = element_text(size = sizeAxisText)
+     )
+  ) +
+  plot_annotation(tag_levels = 'a')
+# render prototype in report
+pFig3 +
+  plot_layout(design = fig2Layout) & 
+  theme(plot.tag = element_text(size = 8, face = "bold"))
+```
+
+```{r ggsaves}
+figHeight = 180
+ggsave(
+  "Figure-03.png", 
+  pFig3 +
+    plot_layout(design = fig2Layout) & 
+    theme(plot.tag = element_text(size = 8, face = "bold")), 
+  width = 10.5, height = 10)
+ggsave("Figure-03.pdf", 
+       pFig3 +
+         plot_layout(design = fig2Layout) & 
+         theme(plot.tag = element_text(size = 8, face = "bold", family = "Sans")), 
+       device = cairo_pdf,
+       width = 170,
+       dpi = 300, 
+       height = figHeight, 
+       units = "mm")
+```
+

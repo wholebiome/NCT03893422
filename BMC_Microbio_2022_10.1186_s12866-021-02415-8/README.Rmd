@@ -1,0 +1,256 @@
+---
+title: "Summarize Tidy Tables"
+author: "Paul J. McMurdie"
+date: '`r format(Sys.Date(), "%Y-%B-%d")`'
+output: rmdformats::readthedown
+editor_options: 
+  chunk_output_type: console
+---
+
+# Motivation
+
+## What is this (tidy) data?
+
+Here we attempt to document the data that form the basis of the presented anlayses.
+It is the complete data necessary to reproduce the main figures and most analyses
+presented in the manuscript.
+The data has been cleaned up and organized into topical tables,
+and for the most part adheres to the requirements of ["tidy"](https://cran.r-project.org/web/packages/tidyr/vignettes/tidy-data.html)
+data.
+
+This [tidy](https://cran.r-project.org/web/packages/tidyr/vignettes/tidy-data.html) data 
+is shared most directly as R-native "RDS" format files.
+This is a compressed, serialized data format that retains 
+the classes, types, and attributes
+when loaded back into R.
+
+Note, some information is redundant (but not discrepant) 
+across the included tables.
+These are different representations of the same data 
+for convenience in calculation or plotting,
+as shown in the `Rmd` corresponding to each main figure.
+
+For the most part, identical variable (column) names appearing
+in more than one table represent the same variable.
+These tend not to be redefined for each table in which they appear.
+This does not mean they are not important to that table.
+
+
+```{r}
+options(stringsAsFactors = FALSE)
+knitr::opts_chunk$set(
+  warning = FALSE,
+  error = TRUE, 
+  echo = TRUE, 
+  fig.width = 10, 
+  fig.height = 7)
+```
+
+Load libraries
+
+```{r}
+library("magrittr")
+library("data.table")
+```
+
+Load all the data for inspection.
+
+```{r}
+tidyFiles <- list.files("tidy_data", pattern = ".",  full.names = TRUE)
+# Load each table object into a list.
+listTidyData <-
+  sapply(tidyFiles, readRDS, simplify = FALSE, USE.NAMES = TRUE)
+names(listTidyData) <- names(listTidyData) %>% basename()
+```
+
+Dimensions (rownum, colnum) of each table
+
+```{r}
+sapply(listTidyData, dim, simplify = FALSE, USE.NAMES = TRUE)
+```
+
+
+
+# Table definitions, by category
+
+There are `r length(listTidyData)` 
+[tidy](https://cran.r-project.org/web/packages/tidyr/vignettes/tidy-data.html)-ish 
+tables provided in the compendium.
+
+## Per protocol ("PP") 
+
+Per protocol ("PP") tables encoding study design and measures.
+
+Tables: 
+
+ - `tabPp.RDS` - Per protocol table containing study design variables and outcome measures related to glucose and insulin.
+ - `tabPpOrigFormat.RDS` - Per protocol table in 'wide' format with study event appended to end of variable name. V0, V1, V3, V7 indicate the events Screen, Baseline, Week 4, and Week 12, respectively. E.g. `A1C_V0`, `A1C_V1`, etc.
+ - `tabGluCtl.RDS` - Measures of glucose control in 'wide' format, with `_Baseline` or `_Week12` appended to the end of each variable name. As this was a convenient location to compute the during-intervention change ('delta'), three additional variables are included that have been prepended with `delta` in their name. Each row is a subject.
+ - `tabSfu.RDS` - Table mapping subject anonymous identifier with variables related to sulfonylurea usage. Each row is a subject + timepoint.
+
+Key variables:
+
+ - `Subject` - Anonymous subject identifier. Consistent across all tables.
+ - `treatment` - Assigned intervention arm.
+ - `Event` - Study event.
+ - `A1C` - HbA1c.
+ - `AUC_INC_GLU` - Oral meal tolerance test glucose area under the curve, incremental.
+ - `AUC_INC_INS` - Oral meal tolerance test insulin area under the curve, incremental.
+ - `AUC_TOT_GLU` - Oral meal tolerance test glucose area under the curve, total area.
+ - `AUC_TOT_INS` - Oral meal tolerance test insulin area under the curve, total area.
+ - `FASTING_GLUCOSE` - Fasting glucose.
+ - `FASTING_INSULIN` - Fasting insulin.
+ - `deltaA1c` - Change in HbA1c from Baseline to Week 12.
+ - `deltaAucTot` - Change in Glucose AUC (total) from Baseline to Week 12.
+ - `deltaAucInc` - Change in Glucose AUC (incremental) from Baseline to Week 12.
+ - `SUL_TREAT` - Clinical record for sulfonylurea usage status, treatment.
+ - `SUL_CONT` - Clinical record for sulfonylurea usage status, continuous.
+ - `SulfonylureaDetected` - Whether any sulfonylurea was detected at either timepoint for this subject.
+ - `Glimepiride` - (SFU) Corresponding untargeted `OrigScale` value. `NA` if not-detected.
+ - `glipizide` - (SFU) Corresponding untargeted `OrigScale` value. `NA` if not-detected.
+ - `glyburide` - (SFU) Corresponding untargeted `OrigScale` value. `NA` if not-detected.
+
+
+## SCFA
+
+Tables:
+
+ - `tabMetabolonScfaLong.RDS` - Targeted SCFA Plasma results structured in long/sparse format, in which each row contains the measured `Concentration` for a `BIOCHEMICAL` (SCFA) in a plasma sample from a `Subject` at a `Event`.
+ - `tabMetabolonScfaEventWide.RDS` - The same targeted SCFA Plasma results as above, but pivoted wide on study event so that each row now contains the `Concentration` for both `Event`s for each `Subject` and `BIOCHEMICAL`.
+ - `tabFecalScfa.RDS` - The SCFA concentration values (mM) in subject *stool* corresponding to these same subjects and timepoints.
+
+Key variables:
+
+ - `Subject` - Anonymous subject identifier. Consistent across all tables.
+ - `treatment` - Assigned intervention arm.
+ - `Event` - Study event. Subject plasma this is either "Baseline" or "Week12".
+ - `BIOCHEMICAL` - Metabolon nomenclature for the human interpretable unique identifier of the indicated molecule. E.g. "Acetic acid".
+ - `Concentration` - Concentration of the indicated fatty acid in the indicated `units` (ng/mL). Fecal concentration is in units of millimoles per liter.
+ - `Tricode` - Unique plasma specimen identifer.
+ - `Week12MinusBaseline` - The change (*delta*) during the study. Week 12 concentration less Baseline concentration in the same units.
+ - `ScaledImpData` - Metabolon rescaled or imputed quazi-quantitative values from untargeted metabolomics.
+ - `OrigScale` - Metabolon original scale values (derived from peak area) from untargeted metabolomics, with explicit missing values as `NA`. No imputation.
+ 
+
+
+## Plasma untargeted metabolomics (Metabolon)
+
+Tables:
+
+ - `tabMetabolonUntgtLong.RDS` - The untargeted metabolomics data from study subject fasting plasma.
+ - `tabMetabolonUntgtWilcox.RDS` - A summary of the nominal results from multiple testing via the Wilcoxon rank sum test. 
+
+Key variables:
+
+ - `Subject` - Anonymous subject identifier. Consistent across all tables.
+ - `treatment` - Assigned intervention arm.
+ - `Event` - Study event. Subject plasma this is either "Baseline" or "Week12".
+ - `BIOCHEMICAL` - Metabolon nomenclature for the human interpretable unique identifier of the indicated molecule. E.g. "Acetic acid".
+ - `Concentration` - Concentration of the indicated fatty acid in the indicated `units` (ng/mL).
+ - `Tricode` - Unique plasma specimen identifer.
+
+Additional variables related to external chemical identifiers or (sub)pathway membership.
+
+ - `SMILES`
+ - `CHEMSPIDER`
+ - `HMDB`
+ - `SUPER_PATHWAY`
+ - `SUB_PATHWAY`
+ - `PLATFORM`
+ - `MASS`
+ - `PUBCHEM`
+ - `CAS`
+ - `KEGG`
+ - `Group HMDB`
+
+## Plasma targeted bile acids (MS-Omics)
+
+Tables:
+
+ - `tabPlasmaMsOmicsBileAcidsLong.RDS` - 
+ 
+Key variables:
+
+ - `SampleID` - Specimen identifier. Equivalent to the plasma `Tricode`.
+ - `Molecule` - The bile acid detected.
+ - `Concentration` - The bile acid concentration in units of micromoles per liter (uM).
+ - `ConjugateFamily` - Group consisting of a bile acid and its amino acid conjugates (perhaps other 'nearby' derivatives).
+
+Variables related to measurement quality:
+
+ - `LOD` - Limit of detection for this molecule.
+ - `belowLod` - Boolean, whether signal was below limit of detection.
+ - `quantStandardUsed` - Identity of the standard relevant to this molecule.
+ - `quantCategory` - Quantification category. "absolut" corresponds to the fraction of the data for which concentration could be determined.
+ - `DP` - Is short for Descriptive Power, which is calculated as the ratio between the
+standard deviation within experimental samples and the standard deviation
+within the QC samples. Variables with a ratio higher than 2.5 are most likely to
+describe variation related to the experimental design and are therefore
+included in the reduced dataset.
+ - `relPrec` - "Relative precision (%)", denotes the relative standard deviation between QC samples and can be used as a measure of the certainty of the measure of the individual
+compounds.
+ - `Absolute Precision` - This term represents the standard deviation between the QC samples.
+
+
+## In vitro monoculture - bile acids
+
+Tables:
+
+ - `tabStrainCultureMetabolon.RDS` - Pilot untargeted metabolomics (Metabolon).
+ - `tabStrainCultureMetabolonPivWideType.RDS` - Previous table, pivoted wide on Strain.
+ - `tabStrainCultureMsOmicsBileAcids.RDS` - Targeted bile acids metabolomics from formulation strains (MS-Omics).
+
+Key variables:
+
+ - `Strain` - Defines which formulation strain the specimen was derived.
+ - `BIOCHEMICAL` - human interpretable unique identifier for molecule detected in Metabolon datasets. Equivalent to `Molecule` (below) in MS-Omics datasets, but exact spelling or nomencalture often differs.
+ - `SampleType` - Defined whether the specimen is Supernatant or Cell Pellet.
+ - `ScaledImpData` - Metabolon rescaled or imputed quazi-quantitative values from untargeted metabolomics.
+ - `OrigScale` - Metabolon original scale values (derived from peak area) from untargeted metabolomics, with explicit missing values as `NA`. No imputation.
+ - `SampleID` - unique (within the dataset) specimen/sample identifier.
+ - `Molecule` - MS-Omics human interpretable molecule identifier 
+ - `MSOID` - MS-Omics molecule identifier
+ - `Concentration` - The concentration inferred from targeted bile acids method (MS-Omics) in units of micromoles / liter.
+ - `ConjugateFamily` - Group consisting of a bile acid and its amino acid conjugates (perhaps other 'nearby' derivatives).
+ - `media` - Defines in which media the strain was grown
+ - `timepoint` - Defines which event in the experiment the specimen was sampled.
+ - `inoculated` - Was this specimen inoculated? Experimental control boolean.
+ - `moleculeAdded` - Which primary bile acid was amended to the medium, if any?
+
+
+## In vitro monoculture - SFU sensitivity
+
+Table:
+
+`tabInvitroSfuSensitivity.RDS`
+
+Key variables:
+
+ - `OD` - The measured variable. Optical density at 600 nm. 
+ - `Hours` - Time in hours. All subsequent variables are design variables or metadata.
+ - `Strain` - Defines which formulation strain was investigated (inoculated) in the indicated run/plate (identifiable by `Strain` + `Round` + `plateType`).
+ - `Solvent` - The titration solvent. DMSO in most cases, except in controls where the entry is missing or water to indicate that the equivalent volume was added as sterile water.
+ - `Solute` - The identity of the single sulfonylurea drug molecule added to the growth medium.
+ - `Concentration` - The starting concentration of the sulfonylurea drug in the growth medium.
+ - `Inoculation` - A boolean. `TRUE` if the well as inoculated with the indicated strain. `FALSE` otherwise. 
+ - `Round` - A number indicating the sequence of successive campaigns to perform and/or repeat the experiment. Not all strains or conditions were measured in any given round.
+ - `SolventPercent` - The v/v percent of DMSO in the growth medium. As shown in the relative behavior of controls in the main figure, all strains exhibit some level of growth inhibition due to presence of DMSO.
+ - `plateType` - Whether or not BCAA was added. Data presented in the main figure are all from the condition/plates in which BCAA was not added.
+ - `WellID` - Coordinates in 96-well growth plate.
+ - `RowID` - Coordinates in 96-well growth plate.
+ - `ColID` - Coordinates in 96-well growth plate.
+
+
+# Full list of included tidy data files
+
+List variable (column) names
+
+```{r, results='asis', echo=FALSE}
+dontshow <-
+  listTidyData %>% 
+  sapply(FUN = colnames, simplify = FALSE, USE.NAMES = TRUE) %>% 
+  sapply(FUN = function(x){paste0(" - `", x, "`", collapse = "\n")}, 
+         simplify = FALSE, USE.NAMES = TRUE) %>% 
+  paste0("\n\n### `", names(listTidyData), "`\n\n", .) %>% 
+  sapply(FUN = cat, simplify = FALSE) 
+```

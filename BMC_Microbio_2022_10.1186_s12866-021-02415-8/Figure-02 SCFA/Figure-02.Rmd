@@ -1,0 +1,1084 @@
+---
+title: "Figure 02 Short Chain Fatty Acids"
+author: "Paul J. McMurdie"
+date: '`r format(Sys.Date(), "%Y-%B-%d")`'
+output: rmdformats::readthedown
+params:
+  tabMetabolonScfaLong: "../tidy_data/tabMetabolonScfaLong.RDS"
+  tabScfaEventWide: "../tidy_data/tabMetabolonScfaEventWide.RDS"
+  tabSfu: "../tidy_data/tabSfu.RDS"
+  tabFecalScfa: "../tidy_data/tabFecalScfa.RDS"
+  tabPp: "../tidy_data/tabPp.RDS"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  error = TRUE, 
+  echo = TRUE, 
+  fig.width = 10, 
+  fig.height = 7)
+```
+
+```{r}
+library("magrittr")
+library("data.table")
+library("ggplot2"); packageVersion("ggplot2")
+library("patchwork"); packageVersion("patchwork")
+library("GGally"); packageVersion("GGally")
+library("ggcorrplot"); packageVersion("ggcorrplot")
+library("ggbeeswarm"); packageVersion("ggbeeswarm")
+```
+
+```{r}
+theme_set(theme_bw())
+scaleColorManualTreatment <-
+  scale_color_manual(
+    values = 
+      c(
+        placebo = "gray50",
+        wbf10 = "darkblue",
+        wbf11 = "darkgreen"
+      )
+  )
+scaleFillManualTreatment <-
+  scale_fill_manual(
+    values = 
+      c(
+        placebo = "gray50",
+        wbf10 = "darkblue",
+        wbf11 = "darkgreen"
+      )
+  )
+studyArmPretty <- 
+  c(placebo = "Placebo", 
+    wbf10 = "WBF-010", 
+    wbf11 = "WBF-011")
+scaleColorTreatmentManPretty <-
+  scale_color_manual(
+    values = 
+      c(
+        "Placebo" = "gray50",
+        "WBF-010" = "darkblue",
+        "WBF-011" = "darkgreen"
+      )
+  )
+scaleFillTreatmentManPretty <-
+  scale_fill_manual(
+    values = 
+      c(
+        "Placebo" = "gray50",
+        "WBF-010" = "darkblue",
+        "WBF-011" = "darkgreen"
+      )
+  )
+scfaNamePretty <-
+  c("Acetic acid" = "Acetate", 
+    "Propionic acid" = "Propionate", 
+    "Butyric acid" = "Butyrate")
+vecOrderScfa <- 
+  c("Acetic acid", "Propionic acid", "Butyric acid") %>% 
+  rev()
+```
+
+
+# Load data
+
+```{r}
+tabMetabolonScfaLong <- readRDS(params$tabMetabolonScfaLong)
+tabScfaEventWide <- readRDS(params$tabScfaEventWide)
+tabSfu <- readRDS(params$tabSfu)
+tabFecalScfa <- readRDS(params$tabFecalScfa)
+# Per protocol
+tabPp <- readRDS(params$tabPp)
+```
+
+Show participants per arm represented in main specimen collection.
+
+```{r}
+tabMetabolonScfaLong %>% 
+  .[, .(No.Participants = uniqueN(Subject)), by = "treatment"] %>% 
+  knitr::kable(digits = 3)
+```
+
+
+
+# Fig 1A: Delta SCFA
+
+## Prepare table
+
+```{r}
+tabKey <- NULL
+tabKey <-
+  tabMetabolonScfaLong %>% copy %>% 
+  .[c("Acetic acid", "Propionic acid", "Butyric acid"), on = "BIOCHEMICAL"] %>% 
+  # Set observations from the same subject+time to the mean among replicates
+  # There are not many of these...
+  .[, ConcMicroMolePerLiter := mean(ConcMicroMolePerLiter), 
+    by = .(BIOCHEMICAL, Subject, Event)] %>% 
+  .[, .SD[1], by = .(BIOCHEMICAL, Subject, Event)]
+tabKey %>% nrow()
+tabKey %>% .$BIOCHEMICAL %>% unique()
+# Define subject factor order based on butyrate concentration at baseline
+orderSubjectBaselineButyrate <-
+  tabKey %>% copy %>% 
+  .[(BIOCHEMICAL == "Butyric acid")] %>% 
+  .[(Event == "Baseline")] %>% 
+  setorder(treatment, ConcMicroMolePerLiter) %>% 
+  .$Subject
+tabKey[, subjectFactor := factor(x = Subject, levels = orderSubjectBaselineButyrate)]
+```
+
+## SCFA at baseline
+
+```{r}
+tabKeyScfaBaseline <-
+  tabKey %>% copy %>% 
+  .[(Event == "Baseline")] %>% 
+  .[, Treatment := studyArmPretty[treatment]]
+# Compute the medians
+tabKeyScfaBaseline %>% 
+      .[, .(
+        GrandMedian = median(ConcMicroMolePerLiter, na.rm = TRUE),
+        stdDev = sd(ConcMicroMolePerLiter, na.rm = TRUE)
+      ), by = "BIOCHEMICAL"] %>% 
+  knitr::kable(digits = 1)
+
+tabKeyScfaBaseline %>% 
+  ggplot(aes(Treatment, ConcMicroMolePerLiter, color = Treatment)) +
+  facet_wrap(~BIOCHEMICAL, scales = "free_y") +
+  geom_hline(
+    linetype = 3,
+    data = tabKeyScfaBaseline %>% 
+      .[, .(GrandMedian = median(ConcMicroMolePerLiter, na.rm = TRUE)), 
+        by = "BIOCHEMICAL"],
+    mapping = aes(yintercept = GrandMedian), 
+    show.legend = FALSE) +
+  geom_boxplot(
+    fill = NA,
+    outlier.shape = NA
+  ) +
+  geom_point(
+    size = 3,
+    stroke = 0,
+    position = position_beeswarm(cex = 4, groupOnX = TRUE)
+  ) +
+  scaleColorTreatmentManPretty +
+  theme(
+    panel.grid = element_blank(),
+    axis.ticks.x = element_blank(),
+    strip.background = element_blank(),
+    legend.position = "none", 
+    )
+```
+
+
+## $\Delta$ Butyrate Concentration
+
+```{r}
+tabScfaDeltas <- tabWinGrpDelta <- tabBwGrpDelta <- NULL
+tabScfaDeltas <-
+  tabKey %>% 
+  # unfortunate case-complexity
+  .[, Treatment := copy(treatment)] %>% 
+  # Compute concentration deltas
+  dcast.data.table(
+    formula = Treatment + Subject + BIOCHEMICAL ~ Event, 
+    value.var = "ConcMicroMolePerLiter", 
+    fun.aggregate = mean, 
+    na.rm = TRUE) %>% 
+  .[, deltaConcentration := Week12 - Baseline]
+
+# Within-group, research question: Did it increase?
+tabWinGrpDeltaGreater <- 
+  tabScfaDeltas %>% 
+  .[, .(
+    wilcoxOut = list(
+      wilcox.test(
+        x = deltaConcentration, 
+        alternative = "greater",
+        conf.int = TRUE,
+        mu = 0.0, 
+        paired = FALSE)
+    )
+  ), 
+  by = .(Treatment, BIOCHEMICAL)]
+
+# Collect the full confidence interval for plotting
+tabWinGrpDelta <- 
+  tabScfaDeltas %>% 
+  .[, .(
+    wilcoxOut = list(
+      wilcox.test(
+        x = deltaConcentration, 
+        alternative = "two.sided",
+        conf.int = TRUE,
+        mu = 0.0, 
+        paired = FALSE)
+    )
+  ), 
+  by = .(Treatment, BIOCHEMICAL)]
+# Extract key results from test
+extract_wi = function(wilcoxOut){data.table(
+  pvalue = wilcoxOut$p.value,
+  statistic = wilcoxOut$statistic,
+  estimate = wilcoxOut$estimate,
+  confIntLo = wilcoxOut$conf.int[1],
+  confIntHi = wilcoxOut$conf.int[2]
+)}
+tabWinGrpDelta <- tabWinGrpDelta[, extract_wi(wilcoxOut[[1]]), 
+                                 by = .(Treatment, BIOCHEMICAL)]
+tabWinGrpDeltaGreater <- 
+  tabWinGrpDeltaGreater[, extract_wi(wilcoxOut[[1]]), 
+                        by = .(Treatment, BIOCHEMICAL)]
+setorder(tabWinGrpDelta, Treatment, -pvalue)
+setorder(tabWinGrpDeltaGreater, Treatment, -pvalue)
+# show table
+tabWinGrpDelta %>% knitr::kable(digits = 3)
+tabWinGrpDeltaGreater %>% knitr::kable(digits = 3)
+# What percent increase is this for butyrate?
+medianButBaseline <-
+  tabKey[(BIOCHEMICAL == "Butyric acid" & 
+            Treatment == "wbf11" & 
+            Event == "Baseline"), 
+         median(ConcMicroMolePerLiter)]
+# This is the percent increase from the median baseline concentration:
+(
+  (medianButBaseline + 
+     tabWinGrpDelta[(BIOCHEMICAL == "Butyric acid" & Treatment == "wbf11")]$estimate) / 
+    medianButBaseline - 1) %>% 
+  multiply_by(100) %>% 
+  round(digits = 0)
+  
+# Between-group test on deltas
+tabBwGrpDelta <-
+  tabScfaDeltas %>% 
+  .[(Treatment %in% c("wbf11", "placebo"))] %>% 
+  .[, .(
+    wilcoxOut = list(
+      try(expr = {
+        wilcox.test(
+          x = deltaConcentration[(Treatment == "wbf11")],
+          y = deltaConcentration[(Treatment == "placebo")],
+          alternative = "greater",
+          conf.int = TRUE,
+          paired = FALSE)
+      }, silent = TRUE)
+    )
+  ), 
+  by = .(BIOCHEMICAL)]
+# Extract key results from test
+extract_wi = function(wilcoxOut){
+  data.table(
+    pvalue = wilcoxOut$p.value,
+    statistic = wilcoxOut$statistic,
+    estimate = wilcoxOut$estimate,
+    confIntLo = wilcoxOut$conf.int[1],
+    confIntHi = wilcoxOut$conf.int[2]
+  )
+}
+# Check that test didn't fail and return non-sense (missing or funky data)
+tabBwGrpDelta[, success := inherits(wilcoxOut[[1]], "htest"), 
+              by = .(BIOCHEMICAL)]
+tabBwGrpDelta <-
+  tabBwGrpDelta %>% 
+  .[(success), try({extract_wi(wilcoxOut[[1]])}, silent = TRUE), 
+    by = .(BIOCHEMICAL)]
+setorder(tabBwGrpDelta, -pvalue)
+tabBwGrpDelta %>% knitr::kable(digits = 3)
+
+# Summarize SCFA changes, clear butyrate increase.
+padAnnotation = 0.2
+tabFig2a <-
+  tabWinGrpDelta %>% copy %>% 
+  .[, Treatment := studyArmPretty[Treatment]] %>% 
+  .[, scfa := factor(scfaNamePretty[BIOCHEMICAL], levels = rev(scfaNamePretty))]
+# molecule-specific limits to enforce centering across panels despite free scale.
+tabFig2aLims <- 
+  tabFig2a %>% copy %>% 
+  .[, .(
+    y = (1 + padAnnotation) * 
+      max(abs(confIntHi), abs(confIntLo))
+  ), by = .(Treatment, scfa)]
+pFig2aConcentrationDelta <-
+  tabFig2a %>% 
+  ggplot(aes(Treatment, estimate)) +
+  facet_wrap(~scfa, scales = "free_y") +
+  geom_hline(yintercept = 0, size = 0.1) +
+  geom_blank(
+    data = tabFig2aLims,
+    mapping = aes(
+      y = y,
+      ymin = -y,
+      ymax = y)
+  ) +
+  geom_pointrange(
+    # alpha = 1.0,
+    # size = 1.25,
+    size = 1.,
+    fatten = 4,
+    shape = 23,
+    stroke = 0,
+    # fill = "black",
+    mapping = aes(
+      fill = Treatment,
+      color = Treatment,
+      # alpha = confIntLo > 0,
+      # fill = confIntLo > 0,
+      # color = confIntLo > 0,
+      y = estimate,
+      ymin = confIntLo,
+      ymax = confIntHi)
+  ) +
+  scaleColorTreatmentManPretty +
+  scaleFillTreatmentManPretty +
+  # Bracket annotations
+  ggpubr::geom_bracket(
+    size = 0.2,
+    bracket.nudge.y = -0.03,
+    vjust = 0.7,
+    hjust = 1,
+    tip.length = c(0.3, 0.002),
+    data = data.table(
+      scfa = factor(
+        x = "Butyrate", 
+        levels = scfaNamePretty %>% rev())
+    ),
+    xmin = "Placebo", 
+    xmax = "WBF-011", 
+    y.position = 0.37, 
+    label = "*") +
+  geom_text(
+    data = data.table(
+      scfa = factor(
+        x = "Butyrate", 
+        levels = scfaNamePretty %>% rev())
+    ),
+    x = "WBF-011", 
+    y = 0.305,
+    label = "**"
+  ) +
+  ylab("\u0394 Concentration [\u03BCM]") +
+  # ggtitle("\u0394 Concentration [\u03BCM]") +
+  theme(
+    plot.title = element_blank(),
+    strip.background.x = element_rect(fill = NA, color = NA),
+    strip.text.x = element_text(
+      hjust = 0,
+      size = 10,
+      # margin = margin(0, 0, 1.4, 0, "pt"),
+      face = "plain"
+    ),
+    panel.border = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(size = 0.2),
+    legend.position = "none",
+    axis.text = element_text(size = 9),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank(),
+    # axis.ticks.y = element_line(size = 0.2),
+    axis.title.y = element_text(size = 12),
+    axis.title.x = element_blank()
+  )
+pFig2aConcentrationDelta
+```
+
+
+# Fig 1B: Correlation bw fecal and circulating SCFA
+
+## Join faecal and plasma SCFA
+
+Show anti-intersections.
+Note: There are some ITT-only participants included in stool data.
+Loss of a few plasma-pairs (due to labeling, etc)
+on the plasma side.
+
+```{r}
+setdiff(tabFecalScfa$Subject, tabKey$Subject) %>% length()
+setdiff(tabKey$Subject, tabFecalScfa$Subject) %>% length()
+```
+
+Join
+
+```{r}
+tabFecalAndPlasma <- NULL
+tabFecalAndPlasma <-
+  (tabFecalScfa %>% copy %>% 
+     setnames("Concentration", "fecal_mM")) %>% 
+  .[(tabKey %>% copy %>% setnames("ConcMicroMolePerLiter", "plasma_uM")), 
+    on = c("Subject", "Event", "BIOCHEMICAL")]
+```
+
+Single trendline for each split.
+Let axes be free because acetate 
+is canonically much higher concentration.
+
+```{r}
+tabFecalAndPlasma %>% copy %>% 
+  # join to add SFU status
+  (tabSfu[, .(SulfonylureaDetected = SulfonylureaDetected[1]), 
+          by = "Subject"])[., on = "Subject"] %>% 
+  ggplot(aes(fecal_mM, plasma_uM)) +
+  # facet_wrap(BIOCHEMICAL ~ Event, scales = "free") +
+  facet_grid(BIOCHEMICAL ~ paste(Treatment, Event, sep = ": "), 
+             scales = "free") +
+  # Enforce zero is in y-axis range
+  geom_hline(
+    size = 0.2,
+    yintercept = 0.0,
+    color = "black",
+    alpha = 0.75) +
+  geom_point(mapping = aes(color = SulfonylureaDetected), show.legend = FALSE) +
+  scale_color_manual(values = c("TRUE" = "gray", "FALSE" = "black")) +
+  geom_smooth(
+    size = 0.25, 
+    # mapping = aes(color = treatment),
+    se = FALSE,
+    color = "black",
+    method = robustbase::lmrob)
+```
+
+Is there a positive association there for butyrate?
+
+Assess correlation, lm
+
+```{r}
+tabFecalPlasmaLmRes <- NULL
+tabFecalPlasmaLmRes <- 
+  tabFecalAndPlasma %>% 
+  .[!is.na(fecal_mM)] %>% 
+  .[, .(
+    lmrobOut = list(
+      robustbase::lmrob(
+        formula = plasma_uM ~ fecal_mM,
+        data = .SD,
+        na.action = na.exclude)
+    ),
+    spearmanCor = cor(fecal_mM, plasma_uM, method = "spearman"),
+    spearmanCorPval = 
+      cor.test(fecal_mM, plasma_uM, method = "spearman")$p.value
+  ), by = .(BIOCHEMICAL, Treatment, Event)]
+
+
+extract_lmrob = function(lmrobOut){
+  x <- NULL
+  x <- lmrobOut %>% summary()
+  data.table(
+    slope = x$coefficients["fecal_mM", "Estimate"],
+    slopeP = x$coefficients["fecal_mM", "Pr(>|t|)"],
+    slopeSE = x$coefficients["fecal_mM", "Std. Error"]
+  )
+}
+
+# (robust) lm results, butyrate at week-12 stands out
+# As it does by eyeball in the chart
+tabFecalPlasmaLmResVals <- NULL
+tabFecalPlasmaLmResVals <-
+  tabFecalPlasmaLmRes %>% 
+  .[, extract_lmrob(lmrobOut[[1]]), 
+    by = .(BIOCHEMICAL, Treatment, Event)] %>% 
+  setorder(BIOCHEMICAL, Treatment, Event)
+tabFecalPlasmaLmResVals
+
+# Butyrate stands out here
+tabFecalPlasmaLmResVals %>% 
+  .[(slope > 0 & slopeP < 0.1)] %>% 
+  knitr::kable(digits = 3)
+
+# And correlation? Not as significant in assessment.
+tabFecalPlasmaLmRes %>% copy %>% 
+  .[, lmrobOut := NULL] %>% 
+  setorder(BIOCHEMICAL, Treatment, Event) %>% 
+  knitr::kable(digits = 3)
+```
+
+Plot polish
+
+```{r}
+pFecalPlasmaFit <- pFecalPlasmaFitSimple <- tabFecalAndPlasmaPlot <- NULL
+tabFecalAndPlasmaPlot <-
+  tabFecalAndPlasma %>% copy %>% 
+  .[(BIOCHEMICAL == "Butyric acid")] %>% 
+  .[, Treatment := factor(x = studyArmPretty[treatment], 
+                          levels = studyArmPretty)] %>%
+  # Create new panel label from Treatment and Event
+  .[, armTimeChar := paste(Treatment, Event, sep = ": ")] %>%  
+  setorder(Treatment, Event) %>% 
+  .[, armTime := factor(armTimeChar, levels = unique(armTimeChar))] %>% 
+  # For plotting purposes, set plasma values above 1.5 to Inf
+  # Will have to explain these were left outside range as possible outliers
+  # or at least skewing the rest of the pattern observable
+  .[(plasma_uM > 1.5), plasma_uM := Inf]
+pFecalPlasmaFitSimple <-
+  tabFecalAndPlasmaPlot %>% 
+  ggplot(aes(fecal_mM, plasma_uM)) +
+  # Omit extra bit of the scale
+  scale_y_continuous(expand = c(0, 0)) +
+  # facet_grid(treatment ~ Event, scales = "free") +
+  facet_wrap(facets = vars(armTime), nrow = 1) +
+  # scaleColorManualTreatment +
+  # Enforce zero is in y-axis range
+  geom_hline(
+    size = 0.5,
+    yintercept = 0.0,
+    color = "black",
+    alpha = 0.75) +
+  # Dummy fit to emphasize the lack of pattern elsewhere
+  geom_smooth(
+    data = tabFecalAndPlasmaPlot,
+    color = "darkgray",
+    se = FALSE,
+    size = 0.35,
+    fullrange = TRUE,
+    na.rm = TRUE,
+    method = robustbase::lmrob,
+  ) +
+  # Just the non-trivial fit
+  geom_smooth(
+    data = tabFecalAndPlasmaPlot %>% 
+      .[(Treatment == "WBF-011")] %>% 
+      .[(Event == "Week12")],
+    color = "darkgreen",
+    fill = "gray90",
+    size = 0.35,
+    fullrange = TRUE,
+    na.rm = TRUE,
+    method = robustbase::lmrob,
+  ) +
+  geom_point(
+    na.rm = TRUE,
+    size = 0.4,
+    color = "black",
+    # mapping = aes(color = treatment),
+    show.legend = FALSE) +
+  ylab("Plasma butyrate [\u03BCM]") +
+  xlab("Fecal butyrate [mM]") +
+  theme(
+    strip.background = element_rect(fill = NA, color = NA),
+    strip.text.x = element_text(
+      hjust = 0.5,
+      size = 8,
+      margin = margin(0, 0, 1.4, 1, "pt")
+    ),
+    panel.border = element_rect(size = 0.2),
+    panel.spacing.y = unit(5, units = "pt"),
+    panel.spacing.x = unit(5, units = "pt"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_blank(),
+    legend.position = "none",
+    axis.text = element_text(size = 9),
+    axis.ticks = element_line(size = 0.2),
+    axis.title = element_text(size = 11)
+  )
+# pFecalPlasmaFitSimple
+
+# For main plot, add p-value annotation.
+pFecalPlasmaFit <-
+  pFecalPlasmaFitSimple +
+  # Annotate slope and p-value
+  geom_text(
+    x = 9,
+    y = 0.75,
+    size = 2,
+    mapping = aes(label = paste0("p = ", round(slopeP, digits = 3))),
+    data =
+      tabFecalPlasmaLmResVals %>% copy %>%
+      .[, Treatment := factor(x = studyArmPretty[Treatment],
+                              levels = studyArmPretty)] %>%
+      .[, armTimeChar := paste(Treatment, Event, sep = ": ")] %>%
+      .[, armTime := factor(armTimeChar, levels = unique(armTimeChar))] %>% 
+      .[(slope > 0 & slopeP < 0.1)]
+  )
+  # ggtitle("Association b/w fecal and circulating butyrate at Week-12?")
+pFecalPlasmaFit
+```
+
+
+# Fig 1C: $\Delta$ HbA1c v. $\Delta$ Butyrate
+
+Correlation changes in HbA1c and plasma SCFA
+
+## Join 
+
+```{r}
+tabGluCtlScfa <-
+  tabPp %>% 
+  dcast.data.table(Subject ~ Event, value.var = c("A1C", "AUC_TOT_GLU")) %>% 
+  .[, deltaA1c := A1C_Week12 - A1C_Baseline] %>% 
+  .[, .(Subject, deltaA1c)] %>% 
+  # Join with scfa table
+  .[tabScfaEventWide, on = "Subject"]
+```
+
+## Prepare param tables for Fig 1C
+
+Show fit if SFU-detected are considered.
+$\Delta$A1c v. $\Delta$Butyrate
+
+```{r}
+# SFU+ subjects excluded
+tabGluCtlScfa %>% 
+  .[(treatment == "wbf11")] %>% 
+  .[!(SulfonylureaDetected)] %>%
+  .[(BIOCHEMICAL == "Butyric acid")] %>% 
+  robustbase::lmrob(formula = deltaA1c ~ Week12MinusBaseline,
+                    data = .) %>% 
+  summary()
+# SFU+ subjects excluded, 
+# high-leverage (high butyrate, < -2 deltaA1c) excluded
+# (for the sake of argument)
+tabGluCtlScfa %>% 
+  .[(treatment == "wbf11")] %>% 
+  .[!(SulfonylureaDetected)] %>%
+  .[(BIOCHEMICAL == "Butyric acid")] %>% 
+  .[(deltaA1c > -2)] %>% # 0.008
+  robustbase::lmrob(formula = deltaA1c ~ Week12MinusBaseline,
+                    data = .) %>% 
+  summary()
+
+# SFU param included rather than SFU+ excluded
+tabGluCtlScfa %>% 
+  .[(treatment == "wbf11")] %>% 
+  .[(BIOCHEMICAL == "Butyric acid")] %>% 
+  robustbase::lmrob(formula = deltaA1c ~ SulfonylureaDetected + Week12MinusBaseline,
+                    data = .) %>% 
+  summary()
+```
+
+The $\Delta$A1c v. $\Delta$Butyrate relationship is stronger 
+than the SFU-naive and log-ratio fit would make it appear.
+Log-ratio is mostly useful in this context when multiple SCFA shown on the same plot
+(especially acetate dominates in both concentration baseline and change).
+Since we have already shown how butyrate stands out 
+(especially in for negative-slope, when SFU is considered),
+and are showing just butyrate in the main figure,
+it makes sense to use the *natural* unit $\Delta$Butyrate [uM].
+
+Correlation has a weak p-value (but WBF-011 most significant ranking).
+
+```{r}
+tabGluCtlScfa %>% 
+  # .[!(SulfonylureaDetected)] %>%
+  .[(BIOCHEMICAL == "Butyric acid")] %>% 
+  .[!is.na(deltaA1c)] %>% 
+  .[, .(
+    spearmanCor = 
+      cor(Week12MinusBaseline, deltaA1c, method = "spearman"),
+    spearmanCorPval = 
+      cor.test(Week12MinusBaseline, deltaA1c, method = "spearman")$p.value
+  ), by = .(BIOCHEMICAL, treatment, SulfonylureaDetected)] %>% 
+  setorder(treatment, SulfonylureaDetected) %>%
+  knitr::kable(digits = 2)
+```
+
+Define function to run lm function,
+extract results into table
+or return `NULL` if something went wrong
+
+```{r}
+run_lm_fun = function(testFormula, dt, lmfun = robustbase::lmrob){
+  linmod <- dtOut <- linModSummary <- NULL
+  trash <-
+    try(silent = TRUE, expr = {
+      linmod <- 
+        lmfun(
+          formula = testFormula,
+          data = dt)
+    })
+  if(!is.null(linmod)){
+    trash <- try(silent = TRUE, expr = {
+      dtOut <-
+        summary(linmod) %>% 
+        coefficients() %>% 
+        as.data.frame() %>%
+        set_colnames(c("paramEstimate", "stdErr", "tValue", "pFitParam")) %>% 
+        data.table(keep.rownames = "CoefficientName", skip_absent=TRUE) %>% 
+        .[, r2 := (summary(linmod)$r.squared)]
+    })
+  }
+  return(dtOut)
+}
+```
+
+The linear model slope parameter very negative,
+stands out dramatically from the others.
+
+```{r}
+tabGluCtlDeltaButyrate <- NULL
+tabGluCtlDeltaButyrate <-
+  tabGluCtlScfa %>% 
+  .[(BIOCHEMICAL == "Butyric acid")] %>% 
+  .[, .(
+    lmA1c = list(
+      run_lm_fun(
+        testFormula = 
+          formula(deltaA1c ~ Week12MinusBaseline,
+                  env = tabGluCtlScfa),
+        dt = .SD, 
+        lmfun = robustbase::lmrob)
+    )
+  ), by = .(BIOCHEMICAL, treatment, SulfonylureaDetected)]
+# Unfurl params
+tabGluCtlDeltaButyrateParams <-
+  tabGluCtlDeltaButyrate %>% 
+  .[!(lmA1c %>% sapply(is.null))] %>% 
+  .[, data.table(lmA1c[[1]]),
+    by = .(BIOCHEMICAL, treatment, SulfonylureaDetected)] %>% 
+  setorder(-r2, pFitParam)
+tabGluCtlDeltaButyrateParams %>% 
+  .[, .(BIOCHEMICAL, treatment, SulfonylureaDetected,
+        CoefficientName, paramEstimate, pFitParam, r2)] %>% 
+  knitr::kable(digits = 3)
+# Since it is drops below the digit threshold in the table,
+# Show it explicitly 
+# (also shown above in the standard model summary):
+tabGluCtlDeltaButyrateParams[1]$pFitParam
+```
+
+Define plot.
+
+```{r}
+tabDeltaGluCtlButPlot <- pDeltaGluCtlBut <- NULL
+tabDeltaGluCtlButPlot <-
+  tabGluCtlScfa %>% copy %>% 
+  .[!is.na(deltaA1c)] %>% 
+  .[(BIOCHEMICAL == "Butyric acid")] %>% 
+  .[, Treatment := factor(x = studyArmPretty[treatment], 
+                          levels = studyArmPretty)]
+
+# with WBF-011 high-leverage point excluded
+tabDeltaGluCtlButHighLev <-
+  tabDeltaGluCtlButPlot %>% copy %>% 
+  .[(deltaA1c < -2)]
+tabDeltaGluCtlButPlot <-
+  tabDeltaGluCtlButPlot %>% 
+  .[(deltaA1c > -2)]
+  
+# Define plot
+pDeltaGluCtlBut <-
+  tabDeltaGluCtlButPlot %>% 
+  ggplot(aes(Week12MinusBaseline, deltaA1c)) +
+  facet_wrap(~Treatment, nrow = 1) +
+  geom_hline(yintercept = 0.0, size = 0.1) +
+  geom_vline(xintercept = 0.0, size = 0.1) +
+  geom_smooth(
+    data = tabDeltaGluCtlButPlot %>% 
+      .[(Treatment == "WBF-011" & !SulfonylureaDetected)],
+    mapping = aes(group = SulfonylureaDetected),
+    method = robustbase::lmrob, 
+    color = "darkgreen",
+    fill = "gray90",
+    size = 0.35,
+    fullrange = TRUE,
+    na.rm = TRUE,
+    se = TRUE) +
+  geom_text(
+    hjust = 0,
+    x = 0.75, 
+    y = -0.5,
+    size = 2.5,
+    # Format
+    # parse = FALSE,
+    # label = "p < 10^-6",
+    # .[(deltaA1c > -2)] %>% # 0.008
+    # See model summaries above, 
+    # this is with high-leverage point omitted.
+    label = "p = 0.008",
+    # mapping = aes(label = pFitParam),
+    data = tabGluCtlDeltaButyrateParams %>% copy %>% 
+      .[(CoefficientName == "Week12MinusBaseline")] %>% 
+      .[(treatment == "wbf11")] %>%
+      .[(SulfonylureaDetected == FALSE)] %>% 
+      .[, Treatment := factor(x = studyArmPretty[treatment], 
+                              levels = studyArmPretty)]
+  ) +
+  geom_point(
+    mapping = aes(fill = SulfonylureaDetected),
+    shape = 21,
+    size = 2, 
+    stroke = 0
+  ) + 
+  # Add back the high-leverage participant as open-circle
+  geom_point(
+    data = tabDeltaGluCtlButHighLev, 
+    shape = 21,
+    size = 1.5, 
+    fill = "white",
+    stroke = 0.5
+  ) +
+  scale_fill_manual(values = c("TRUE" = "gray", "FALSE" = "black")) +
+  xlab("\u0394 Plasma butyrate [\u03BCM]") +
+  ylab("\u0394 HbA1c") +
+  theme(
+    axis.title.y = element_text(size = 12, angle = 0, vjust = 0.5),
+    axis.title.x = element_text(size = 10),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 10),
+    strip.background.x = element_rect(fill = NA, color = NA),
+    strip.background.y = element_rect(fill = NA),
+    legend.position = "none",
+    axis.ticks = element_blank()
+    )
+# pDeltaGluCtlBut
+```
+
+## Fig 1c: $\Delta$A1c v. $\Delta$Butyrate
+
+Add in-figure legend
+
+```{r}
+pDeltaGluCtlBut <-
+  pDeltaGluCtlBut +
+  # Label highest and lowest points as in-chart legend
+  ggrepel::geom_text_repel(
+    seed = 711,
+    segment.size = 0.2,
+    box.padding = 0.5,
+    point.padding = 0.1,
+    nudge_x = 1,
+    nudge_y = 0.2,
+    data = pDeltaGluCtlBut$data %>% copy %>% 
+      .[, thisLegend := NA_character_] %>% 
+      # only write the labels on WBF-011 (right)
+      .[(treatment == "wbf10")] %>% 
+      .[(deltaA1c == max(deltaA1c[which(SulfonylureaDetected == TRUE)], 
+                         na.rm = TRUE)), 
+        thisLegend := "SFU use"] %>% 
+      .[(deltaA1c == min(deltaA1c[which(SulfonylureaDetected == FALSE)], 
+                         na.rm = TRUE)), 
+        thisLegend := "No SFU use"] %>% 
+      .[!is.na(thisLegend)],
+    mapping = aes(label = thisLegend, 
+                  color = SulfonylureaDetected),
+    min.segment.length = 0,
+    size = 3
+  ) +
+  scale_color_manual(values = c("TRUE" = "gray", "FALSE" = "black"))
+pDeltaGluCtlBut
+```
+
+
+
+# Fig 1D: delta heatmap
+
+## Prepare $\Delta$ tables
+
+```{r}
+tabPpDelta <- NULL
+tabPpDelta <-
+  tabPp %>% copy %>% 
+  .[(Event %in% c("Baseline", "Week12"))] %>% 
+  melt.data.table(
+    id.vars = c("treatment", "Subject", "Event"), 
+    variable.name = "clinicMeasure", 
+    value.name = "clinicValue") %>% 
+  dcast.data.table(
+    formula = treatment + Subject + clinicMeasure ~ Event, 
+    value.var = "clinicValue") %>% 
+  .[, deltaValue := Week12 - Baseline] %>% 
+  # prepend varnames so that "delta" is in front
+  .[, ClinMeasDelta := paste0("delta", clinicMeasure)] %>% 
+  dcast.data.table(
+    formula = Subject ~ ClinMeasDelta,
+    value.var = "deltaValue")
+#   # Compute the deltas
+tabPpDelta %>% show()
+```
+
+## $\Delta$ Corr Heatmap
+
+```{r}
+# Define inclusion and order
+gluChar <- c(
+  "deltaAUC_INC_INS",
+  "deltaAUC_TOT_INS", 
+  "deltaFASTING_INSULIN",
+  "deltaFASTING_GLUCOSE",
+  "deltaAUC_TOT_GLU",
+  "deltaAUC_INC_GLU",
+  "deltaA1C"
+) %>% 
+  rev()
+
+scfaChar <- 
+  c(
+    "Acetic acid", 
+    "Propionic acid", 
+    "Butyric acid") 
+deltaScfaNamePretty <-
+  c("Acetic acid" = "deltaAcetate", 
+    "Propionic acid" = "deltaPropionate", 
+    "Butyric acid" = "deltaButyrate")
+showChar <- c(scfaChar, gluChar)
+orderChar <- c(deltaScfaNamePretty[scfaChar] %>% unname(), gluChar)
+# Convert all 'delta' in variable names to the unicode greek delta symbol
+# "\u0394"
+orderChar <- 
+  gsub("^delta", "\u0394 ", orderChar) %>% 
+  set_names(orderChar)
+# Standardize the nomenclature for glycated hemoglobin
+orderChar <- gsub("A1C", "HbA1c", orderChar)
+# Standardize capitalization (not all lower case)
+orderChar <- gsub("FASTING", "Fasting", orderChar)
+orderChar <- gsub("_INSULIN", " insulin", orderChar)
+orderChar <- gsub("_INS$", " insulin", orderChar)
+orderChar <- gsub("_GLUCOSE", " glucose", orderChar)
+orderChar <- gsub("_GLU$", " glucose", orderChar)
+orderChar <- gsub("_TOT", "_tot", orderChar)
+orderChar <- gsub("_INC", "_inc", orderChar)
+
+# Define change correlation table
+tabDeltaCorr <- NULL
+tabDeltaCorr <-
+  tabScfaEventWide %>%
+  .[(BIOCHEMICAL %in% scfaChar)] %>% 
+  # cast wide on Subject
+  dcast.data.table(
+    formula = treatment + Subject ~ BIOCHEMICAL, 
+    value.var = "log2Wk12OverBaseline", 
+    drop = TRUE, 
+    fun.aggregate = mean, 
+    na.rm = TRUE) %>% 
+  # Join to add study values
+  .[(tabPpDelta), on = "Subject", nomatch = 0] %>% 
+  # Remove the categoricals, except for treatment
+  .[, -c("Subject"), with = FALSE] %>% 
+  .[, .(
+    spearmat = list(spearman = cor(x = .SD, method = "spearman", 
+                                   use = "pairwise.complete.obs")),
+    spearmat.p = list(cor_pmat(x = .SD, method = "spearman",
+                               use = "pairwise.complete.obs"))
+  ), by = .(treatment)]
+
+tabDeltaCorrVals <-
+  tabDeltaCorr %>% 
+  .[,
+    (
+      data.table(spearmat[[1]], keep.rownames = "row") %>% 
+        melt.data.table(id.vars = "row", 
+                        variable.name = "col", 
+                        value.name = "Correlation")
+    ), by = "treatment"] %>% 
+  # Join with p-value matrix
+  .[(
+    tabDeltaCorr %>% 
+      .[, (data.table(spearmat.p[[1]], keep.rownames = "row") %>% 
+         melt.data.table(id.vars = "row", 
+                         variable.name = "col", 
+                         value.name = "p")), 
+        by = "treatment"]),
+    on = c("treatment", "row", "col")]
+
+# Define plotting table
+tabSimpleDeltaCorr <-  NULL
+tabSimpleDeltaCorr <- 
+  tabDeltaCorrVals %>% copy %>% 
+  # Filter
+  .[((row %in% showChar) & (col %in% showChar))] %>% 
+  # Pretty arm names
+  .[, Treatment := factor(x = studyArmPretty[treatment], 
+                          levels = studyArmPretty)]
+# Unify the SCFA names
+tabSimpleDeltaCorr[, Row := row %>% as.character() %>% copy()]
+tabSimpleDeltaCorr[(row %in% names(deltaScfaNamePretty)), 
+                   Row := deltaScfaNamePretty[row]]
+tabSimpleDeltaCorr[, Col := col %>% as.character() %>% copy()]
+tabSimpleDeltaCorr[(Col %in% names(deltaScfaNamePretty)), 
+                   Col := deltaScfaNamePretty[Col]]
+
+# Create a facet-version of row, col to enforce ordering.
+tabSimpleDeltaCorr[, Row := factor(orderChar[Row], levels = orderChar)]
+tabSimpleDeltaCorr[, Col := factor(orderChar[Col], levels = orderChar)]
+
+
+## define $\Delta$ heatmap
+pHeatDeltaSimple <- NULL
+pHeatDeltaSimple <- 
+  tabSimpleDeltaCorr %>% copy %>% 
+  # Significance simplifier for plotting
+  .[(p > 0.4), Correlation := 0.0] %>% 
+  ggplot(mapping = aes(Row, Col, fill = Correlation)) +
+  facet_wrap(facets = vars(Treatment), nrow = 1) +
+  geom_raster() +
+  scale_fill_gradient2(
+    low = "darkcyan",
+    mid = "white",
+    high = "chocolate4",
+    midpoint = 0,
+    breaks = c(-1, -0.5, 0, 0.5, 1)
+  ) +
+  # Adjust the color mapping legend
+  guides(
+    fill = guide_colourbar(
+      # nbin = 5, 
+      barwidth = 20, 
+      barheight = 0.5)
+  ) +
+  theme(
+    legend.box = "horizontal",
+    legend.direction = "horizontal",
+    # legend.text = element_text(vjust = 0.7),
+    legend.title = element_text(vjust = 1),
+    legend.position = "bottom",
+    strip.background.x = element_rect(fill = "white", color = "black"),
+    strip.text.x = element_text(size = 10),
+    # strip.background.y = element_rect(fill = NA),
+    axis.title = element_blank(),
+    # plot.background = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank(),
+    # axis.text.x = element_text(angle = 75, hjust = 1),
+    axis.text.y = element_text(size = 10, hjust = 0, margin = margin(r = -3))
+  )
+## Show heatmap
+pHeatDeltaSimple
+```
+
+
+# Build Figure 02 
+
+Combined figure summarizing these results...
+
+```{r pFig2, fig.width=8.5, fig.height=9}
+pFig2 <- NULL
+fig2Layout <- "
+A
+B
+C
+D
+"
+pFig2 <-
+  (
+    pFig2aConcentrationDelta + 
+      theme(axis.title.y = element_text(margin = margin(r = -110, unit = "pt")))
+  ) +
+  # pFecalPlasmaFit /
+  (
+    pFecalPlasmaFit + 
+      theme(axis.title.y = element_text(margin = margin(r = -110, unit = "pt")))
+  ) +
+  (
+    pDeltaGluCtlBut + 
+      theme(axis.title.y = element_text(margin = margin(r = -80, unit = "pt")))
+  ) +
+  # 1012
+  pHeatDeltaSimple +
+  plot_layout(design = fig2Layout) +
+  plot_annotation(tag_levels = 'a') & 
+  theme(plot.tag = element_text(size = 10, face = "bold"))
+pFig2
+```
+
+```{r ggsave}
+ggsave("Figure-02.png", pFig2, width = 8.5, height = 9)
+```
+
+
+

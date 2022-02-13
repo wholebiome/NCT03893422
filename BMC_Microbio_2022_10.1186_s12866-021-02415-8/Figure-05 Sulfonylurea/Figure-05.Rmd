@@ -1,0 +1,1730 @@
+---
+title: "Figure 05 Sulfonylurea (SFU)"
+author: "Paul J. McMurdie"
+date: '`r format(Sys.Date(), "%Y-%B-%d")`'
+output: rmdformats::readthedown
+params:
+  tabSfu: "../tidy_data/tabSfu.RDS"
+  tabGluCtl: "../tidy_data/tabGluCtl.RDS"
+  tabPp: "../tidy_data/tabPp.RDS"
+  tabPpOrigFormat: "../tidy_data/tabPpOrigFormat.RDS"
+  tabInvitroSfuSensitivity: "../tidy_data/tabInvitroSfuSensitivity.RDS"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  error = TRUE, 
+  echo = TRUE, 
+  fig.width = 10, 
+  fig.height = 7)
+```
+
+```{r}
+library("magrittr")
+library("data.table")
+library("ggplot2"); packageVersion("ggplot2")
+library("patchwork"); packageVersion("patchwork")
+library("ggbeeswarm"); packageVersion("ggbeeswarm")
+library("pspline"); packageVersion("pspline")
+```
+
+```{r}
+theme_set(
+  theme_bw() +
+    theme(
+      panel.grid = element_blank(), 
+      axis.ticks = element_line(size = 0.25),
+      strip.background = element_blank(),
+      strip.text.y = element_text(angle = 0)
+    )
+)
+scaleColorManualTreatment <-
+  scale_color_manual(
+    values = 
+      c(
+        placebo = "gray50",
+        wbf10 = "darkblue",
+        wbf11 = "darkgreen"
+      )
+  )
+scaleFillManualTreatment <-
+  scale_fill_manual(
+    values = 
+      c(
+        placebo = "gray50",
+        wbf10 = "darkblue",
+        wbf11 = "darkgreen"
+      )
+  )
+studyArmPretty <- 
+  c(placebo = "Placebo", 
+    wbf10 = "WBF-010", 
+    wbf11 = "WBF-011")
+scaleColorTreatmentManPretty <-
+  scale_color_manual(
+    values = 
+      c(
+        "Placebo" = "gray50",
+        "WBF-010" = "darkblue",
+        "WBF-011" = "darkgreen"
+      )
+  )
+scaleFillTreatmentManPretty <-
+  scale_fill_manual(
+    values = 
+      c(
+        "Placebo" = "gray50",
+        "WBF-010" = "darkblue",
+        "WBF-011" = "darkgreen"
+      )
+  )
+scfaNamePretty <-
+  c("Acetic acid" = "Acetate", 
+    "Propionic acid" = "Propionate", 
+    "Butyric acid" = "Butyrate")
+vecOrderScfa <- 
+  c("Acetic acid", "Propionic acid", "Butyric acid") %>% 
+  rev()
+```
+
+
+# Load data
+
+```{r}
+tabSfu <- readRDS(params$tabSfu)
+tabGluCtl <- readRDS(params$tabGluCtl)
+# Per protocol
+tabPp <- readRDS(params$tabPp)
+tabPpOrigFormat <- readRDS(params$tabPpOrigFormat)
+```
+
+## join
+
+```{r}
+tabSfuSimple <-
+  tabSfu %>% copy %>% 
+  .[, 
+    .(
+      SulfonylureaDetected = any(SulfonylureaDetected),
+      SUL_TREAT = any(SUL_TREAT=="Yes"), 
+      SUL_CONT = any(SUL_CONT=="Yes")
+    ), 
+    by = "Subject"]
+tabSfuGluCtl <- 
+  tabSfuSimple[tabGluCtl, on = "Subject"] %>% copy()
+```
+
+
+# SFU Detection Accuracy
+
+How well does untargeted plasma data recall
+(in the data sense, sensitivity)
+the SFU usage of subjects?
+
+```{r}
+# Confusion matrix between the two clinical records for SFU drug use
+tabSfuGluCtl[, .(SUL_TREAT, SUL_CONT)] %>% table()
+# So SUL_TREAT is a very mild superset, probably of the form
+# 'has this subject ever been treated with SFU',
+# while `SUL_CONT` is, 'is this subject currently taking SFU continuously'
+tabSfuGluCtl[, .(SulfonylureaDetected, SUL_TREAT)] %>% table() 
+```
+
+Note Subject 48 was not included in plasma measurements.
+
+```{r}
+tabSfu[(Subject == "48")]
+tabSfu$Subject %>% uniqueN()
+tabPpOrigFormat[(Subject == "48"), .(Subject, SUL_TREAT, SUL_CONT)]
+tabSfuGluCtl[(Subject == "48"), c("SUL_TREAT", "SUL_CONT") := FALSE]
+# Add a variable indicating whether SFU was reasonably 'expected' to be found...
+tabSfuGluCtl[, Expected := (SUL_TREAT | SUL_CONT)]
+tabSfuGluCtl[, DetectedOrExpected := (Expected | SulfonylureaDetected)]
+```
+
+Expected v. Detected (in plasma)
+
+```{r}
+tabSfuGluCtl[, .(Expected, SulfonylureaDetected)] %>% table()
+tabSfuGluCtl[, .(treatment, Expected, SulfonylureaDetected)] %>% table()
+# Number of subjects per detected SFU molecule
+tabSfu %>% 
+  melt.data.table(
+    id.vars = c("treatment", "Subject", "Event"), 
+    measure.vars = c("Glimepiride", "glipizide", "glyburide"), 
+    variable.name = "SFU", 
+    value.name = "Signal") %>% 
+  .[!is.na(Signal)] %>% 
+  .[, .(N = uniqueN(Subject)), by = "SFU"]
+# Summarize agreement between timepoints
+tabSummarizeAgreement <-
+  tabSfu %>% 
+  .[, .(
+    anySfuDetected = sum(SulfonylureaDetected),
+    sfuResultAgrees = SulfonylureaDetected %>% equals(SulfonylureaDetected[1]) %>% all(),
+    glimepirideAgrees = is.na(Glimepiride) %>% equals(is.na(Glimepiride[1])) %>% all(),
+    glipizideAgrees = is.na(glipizide) %>% equals(is.na(glipizide[1])) %>% all(),
+    glyburideAgrees = is.na(glyburide) %>% equals(is.na(glyburide[1])) %>% all(),
+    sfusDetected = 
+      c(ifelse(is.na(Glimepiride), NA_character_, "Glimepiride"),
+        ifelse(is.na(glipizide), NA_character_, "glipizide"),
+        ifelse(is.na(glyburide), NA_character_, "glyburide")) %>% 
+      unique() %>% sort() %>% 
+      paste0(collapse = ", ")
+  ), 
+  by = "Subject"]
+# For every subject, both their blood samples agrees on SFU+ or SFU-
+tabSummarizeAgreement[, .(sfuResultAgrees)] %>% table()
+# Zoom-in on the examples where Baseline & Week12 
+# disagree on which SFU drug
+tabSfu[tabSummarizeAgreement[grep(",", fixed = TRUE, x = sfusDetected)]$Subject, 
+       on = "Subject"] %>% 
+  .[, .(treatment, Subject, Event, SUL_TREAT, 
+        Glimepiride, glipizide, glyburide)] %>% 
+  knitr::kable()
+```
+
+So all subject timepoints agree that a subject has at least one SFU
+Only 5 of 19 subjects with detected SFU
+have any disagreement or multiple SFU detected.
+For Subject 68 the 'disagreement' is trivial,
+in that glipizide was detected in both,
+but glimepiride was also detected at Week 12
+
+```{r}
+tabSfu[(SulfonylureaDetected), uniqueN(Subject)]
+```
+
+
+
+# Fig. 4a: SFU and HbA1c
+
+```{r}
+pSfuA1c <- NULL
+vecPaletteSfu <- 
+  c(`TRUE` = "orange", 
+    `FALSE` = "black", 
+    `NA` = "gray")
+tabSfuGluCtlEmbedLegend <-
+  tabSfuGluCtl %>% copy %>% 
+  # only write the labels on the placebo group (left)
+  .[(treatment == "placebo")] %>% 
+  .[, Treatment := studyArmPretty[treatment]] %>% 
+  .[, thisLegend := NA_character_] %>% 
+  .[(deltaA1c == max(deltaA1c[which(DetectedOrExpected == TRUE)], na.rm = TRUE)), 
+    thisLegend := "SFU\nused"] %>% 
+  .[(deltaA1c == min(deltaA1c[which(DetectedOrExpected == FALSE)], na.rm = TRUE)), 
+    thisLegend := "No SFU used"] %>% 
+  .[!is.na(thisLegend)]
+pSfuA1c <-
+  tabSfuGluCtl %>% copy %>% 
+  .[, Treatment := studyArmPretty[treatment]] %>% 
+  .[, dummyForTitle := "\u0394 HbA1c [%]"] %>% 
+  ggplot(
+    mapping = aes(
+      x = Treatment, 
+      y = deltaA1c
+    )
+  ) +
+  facet_wrap(~dummyForTitle) +
+  geom_hline(yintercept = 0.0, size = 0.25, color = "darkgray") +
+  stat_summary(
+    width = 0.65,
+    alpha = 1, 
+    size = 0.2,
+    mapping = aes(color = DetectedOrExpected), 
+    geom = "crossbar",
+    fun = mean, 
+    fun.min = mean, 
+    fun.max = mean,
+    data = tabSfuGluCtl %>% copy %>% 
+      .[, Treatment := studyArmPretty[treatment]] %>% 
+      # Don't crossbar the lone unmeasured subject
+      .[!is.na(DetectedOrExpected)]
+  ) +
+  geom_beeswarm(
+    shape = 21,
+    mapping = aes(color = DetectedOrExpected, fill = DetectedOrExpected),
+    groupOnX = TRUE,
+    cex = 4,
+    size = 2, 
+    stroke = 0.1,
+    alpha = 1
+  ) +
+  scale_fill_manual(
+    name = "SFU:",
+    values = vecPaletteSfu
+  ) +
+  scale_color_manual(
+    name = "SFU:",
+    values = vecPaletteSfu
+  ) +
+  # Label highest and lowest points as in-chart legend
+  ggrepel::geom_label_repel(
+    arrow = arrow(length = unit(0.015, "npc")),
+    seed = 711,
+    force = 3,
+    force_pull = 0.25,
+    box.padding = 2,
+    point.padding = 0.25,
+    nudge_x = -0.2,
+    nudge_y = c(-1, 1),
+    data = tabSfuGluCtlEmbedLegend,
+    mapping = aes(label = thisLegend, 
+                  color = DetectedOrExpected),
+    min.segment.length = 0,
+    size = 2.25
+  ) +
+  theme(
+    title = element_blank(),
+    strip.text = element_text(size = 14, hjust = 0),
+    strip.background = element_blank(),
+    axis.text.y = element_text(size = 14),
+    axis.text.x = element_text(size = 16),
+    axis.title.y = element_blank(),
+    axis.title.x = element_blank(),
+    axis.ticks.y = element_line(size = 0.25),
+    axis.ticks.x = element_blank(),
+    legend.position = "none",
+    panel.grid = element_blank()
+  )
+pSfuA1c
+```
+
+- Which SFU was used by that single +SFU A1c 'responder'? ... Glipizide.
+- Are they the only Glipizide user? ... No. 
+Looks like five of seven SFU-using subjects in WBF-011 were using Glipizide.
+So, this is only partially informative, 
+in that it is the SFU to which the formulation strains were least sensitive
+during the *in vitro* monoculture assay.
+- The delta-A1c ordered table below 
+does not look stratified by SFU.
+
+```{r}
+tabSfuGluCtl %>% 
+  .[(DetectedOrExpected & treatment == "wbf11")] %>% 
+  .[, .(Subject, deltaA1c)] %>% 
+  unique() %>% 
+  tabSfu[., on = "Subject", nomatch = 0] %>% 
+  .[(treatment == "wbf11")] %>% 
+  .[, .(Subject, Event, Glimepiride, glipizide, glyburide, deltaA1c)] %>% 
+  # unique() %>% 
+  setorder(deltaA1c) %>% 
+  knitr::kable()
+```
+
+
+# Fig. 4b: Re-estimated glucose control endpoints
+
+```{r}
+tabSfuGluCtl %>% 
+  .[!(DetectedOrExpected)] %>% 
+  .[, mean(deltaA1c, na.rm = TRUE), by = "treatment"] %>% 
+  .[, V1[treatment == "wbf11"] - V1[treatment == "placebo"]]
+```
+
+```{r}
+# Original
+lm(formula = deltaA1c ~ 0 + treatment, data = tabSfuGluCtl)
+# Clinical record only
+lm(formula = deltaA1c ~ 0 + treatment, data = tabSfuGluCtl[!(Expected)])
+# Clinical record or direct detection
+lm(formula = deltaA1c ~ 0 + treatment, data = tabSfuGluCtl[!(DetectedOrExpected)])
+lm(formula = deltaA1c ~ DetectedOrExpected + treatment, data = tabSfuGluCtl)
+```
+
+```{r}
+extract_ttest_wingrp = function(ttestOut){
+  data.table(
+    pvalue = ttestOut$p.value[1],
+    statistic = ttestOut$statistic[1],
+    estimate = ttestOut$estimate[1],
+    confIntLo = ttestOut$conf.int[1],
+    confIntHi = ttestOut$conf.int[2]
+  )
+}
+extract_ttest_bwgrp = function(ttestOut){
+  data.table(
+    pvalue = ttestOut$p.value[1],
+    statistic = ttestOut$statistic[1],
+    estimate = ttestOut$estimate[1] - ttestOut$estimate[2],
+    confIntLo = ttestOut$conf.int[1],
+    confIntHi = ttestOut$conf.int[2]
+  )
+}
+tabDataForTests <- tabTests <- NULL
+tabDataForTests <- 
+  rbindlist(
+    use.names = TRUE, 
+    fill = TRUE, 
+    idcol = "inclusionCriteria",
+    l = list(
+      perProtocol = tabSfuGluCtl %>% copy,
+      noSfuClinicOnly = tabSfuGluCtl[(Expected == FALSE)] %>% copy,
+      noSfuClinicOrPlasma = tabSfuGluCtl[(DetectedOrExpected == FALSE)] %>% copy
+    )
+  ) %>% 
+  # Select the variables to carry forward into tests
+  .[, .(deltaA1c, deltaAucTot, deltaAucInc, 
+        treatment, Subject, inclusionCriteria)] %>% 
+  # pivot longer so that can loop once
+  melt.data.table(
+    id.vars = c("treatment", "Subject", "inclusionCriteria"), 
+    measure.vars = c("deltaA1c", "deltaAucTot", "deltaAucInc"), 
+    variable.name = "gluCtlMeasure", 
+    value.name = "gluCtlValue")
+# Within-group t-tests
+tabTestsWinGrp <- 
+  tabDataForTests %>% 
+  .[, .(ttest = list(t.test(x = gluCtlValue, 
+                            conf.level = 0.95, 
+                            alternative = "two.sided"))), 
+    by = .(gluCtlMeasure, inclusionCriteria, treatment)] %>% 
+  .[, try({extract_ttest_wingrp(ttest[[1]])}, silent = TRUE), 
+    by = .(gluCtlMeasure, inclusionCriteria, treatment)] %>% 
+  setnames("pvalue", "pWinGrp") %>% 
+  setnames("estimate", "estWinGrp")
+# tabTestsWinGrp %>% show()
+# Between-group WBF-011, t-tests
+tabTestsBwGrp <- 
+  tabDataForTests %>% 
+  .[, .(ttest = list(t.test(x = gluCtlValue[(treatment == "wbf11")],
+                            y = gluCtlValue[(treatment == "placebo")],
+                            conf.level = 0.95, 
+                            alternative = "two.sided"))), 
+    by = .(gluCtlMeasure, inclusionCriteria)] %>% 
+  .[, try({extract_ttest_bwgrp(ttest[[1]])}, silent = TRUE), 
+    by = .(gluCtlMeasure, inclusionCriteria)] %>% 
+  setnames("pvalue", "pBwGrp") %>% 
+  setnames("estimate", "estBwGrp")
+
+# Join the two for plotting
+tabTests <- NULL
+tabTests <-
+  tabTestsBwGrp %>% 
+  .[, .(gluCtlMeasure, inclusionCriteria, pBwGrp, estBwGrp)] %>% 
+  .[tabTestsWinGrp, on = .(gluCtlMeasure, inclusionCriteria)]
+```
+
+```{r}
+charInclusionPretty <-
+  c(
+    "perProtocol" = "Per\nProtocol", 
+    "noSfuClinicOnly" = "No SFU: Clinic", 
+    "noSfuClinicOrPlasma" = "No SFU:\nClinic or Plasma")
+tabTests %>% copy %>% 
+  .[, Treatment := studyArmPretty[treatment]] %>% 
+  .[, Inclusion := factor(charInclusionPretty[inclusionCriteria], 
+                          levels = charInclusionPretty)] %>% 
+  ggplot(aes(Treatment, estWinGrp, color = Treatment, fill = Treatment)) +
+  facet_grid(gluCtlMeasure ~ Inclusion, scales = "free_y") +
+  geom_hline(yintercept = 0.0, size = 0.25) +
+  # Enforce symmetric y-axis ranges
+  geom_blank(mapping = aes(Treatment, -estWinGrp)) +
+  # The within-group estimates + C.I.s
+  geom_pointrange(
+    alpha = 1.0,
+    size = 1,
+    fatten = 3,
+    shape = 23,
+    stroke = 0,
+    # position = position_dodge(width = 0.6),
+    mapping = aes(ymin = confIntLo, ymax = confIntHi)
+  ) +
+  scaleColorTreatmentManPretty +
+  scaleFillTreatmentManPretty +
+  theme(
+    legend.position = "none", 
+    axis.text.x = element_text(
+      size = 8,
+      angle = 35, 
+      hjust = 1, 
+      vjust = 1))
+```
+
+```{r}
+unicodeDelta = "\u0394"
+gluCtlMeasurePretty = c(
+  deltaA1c = paste0(unicodeDelta, " HbA1c [%]"),
+  deltaAucInc = paste0(unicodeDelta, " AUC [incremental]"),
+  deltaAucTot = paste0(unicodeDelta, " AUC [total]")
+)
+tabTestsBwGrp$gluCtlMeasure %>% unique()
+
+# Prepare plot
+tabTestsBwGrpPlot <-
+  tabTestsBwGrp %>% copy %>% 
+  .[, GlucoseControl := factor(gluCtlMeasurePretty[gluCtlMeasure], 
+                               levels = gluCtlMeasurePretty)] %>%   
+  .[, Inclusion := factor(charInclusionPretty[inclusionCriteria], 
+                          levels = charInclusionPretty)] %>% 
+  .[, py := Inf, by = .(GlucoseControl)]
+# annotation text size
+sizeTextAnnotate <- 2.15
+# Define plot
+pTestsBwGrp <-
+  tabTestsBwGrpPlot %>% 
+  ggplot(aes(Inclusion, estBwGrp)) +
+  # Align origin
+  geom_blank(mapping = aes(y = -0.2 * estBwGrp)) +
+  coord_flip() + 
+  facet_wrap(~GlucoseControl, 
+             ncol = 1, 
+             scales = "free_x", 
+             strip.position = "top") +
+  # The mean
+  geom_col(fill = "gray", color = NA, width = 0.5) +
+  # Highlight origin
+  geom_hline(yintercept = 0.0, size = 0.2, color = "black") +
+  # Emphasize the per-protocol mean
+  geom_hline(
+    linetype = 3,
+    data = tabTestsBwGrp %>% 
+      copy %>% 
+      .[(inclusionCriteria == "perProtocol")] %>% 
+      .[, GlucoseControl := factor(gluCtlMeasurePretty[gluCtlMeasure], 
+                                   levels = gluCtlMeasurePretty)] %>%  
+      .[, Inclusion := factor(charInclusionPretty[inclusionCriteria], 
+                              levels = charInclusionPretty)],
+    mapping = aes(yintercept = estBwGrp), 
+    size = 0.25) +
+  # The between-group estimates + C.I.s
+  geom_pointrange(
+    color = "gray50",
+    fill = "gray50",
+    alpha = 1,
+    size = 0.3,
+    fatten = 2,
+    shape = 23,
+    stroke = 0,
+    # position = position_dodge(width = 0.6),
+    mapping = aes(ymin = confIntLo, ymax = confIntHi)
+  ) +
+  # p-value
+  geom_text(
+    size = sizeTextAnnotate,
+    vjust = -0.5,
+    hjust = 1.1,
+    mapping = aes(
+      y = py,
+      label = round(pBwGrp, digits = 3) %>% paste("p =", .)
+    )
+  ) +
+  # estimate
+  geom_text(
+    data = tabTestsBwGrpPlot[(gluCtlMeasure == "deltaA1c")],
+    size = sizeTextAnnotate,
+    nudge_x = 0.3,
+    nudge_y = 0.005,
+    mapping = aes(
+      y = estBwGrp - (abs(confIntLo - estBwGrp)/10),
+      label = round(estBwGrp, digits = 1) %>% format(digits = 1, justify = "right")
+    )
+  ) +
+  ggtitle("Between-group comparisons [WBF-011 - Placebo]") +
+  theme(
+    plot.title = element_text(size = 10, color = "gray40"),
+    axis.title = element_blank(),
+    axis.text.x = element_text(hjust = 0.5, size = 10),
+    strip.text = element_text(hjust = 0, size = 14)
+  )
+pTestsBwGrp
+```
+
+
+# Fig. 4c: SFU Sensitivity, in vitro Monoculture
+
+```{r}
+tabInvitroSfuSensitivity <- NULL
+tabInvitroSfuSensitivity <-
+  readRDS(file = params$tabInvitroSfuSensitivity)
+# Define the experimental replication group.
+# The same well coordinate appears many times,
+# so we need to include the other 'run' identifiers
+# that indicate a physically unique growth curve
+tabInvitroSfuSensitivity[, repgrp := paste0(Strain, Round, plateType, WellID)]
+```
+
+Convert mass concentrations to millimoles per liter (mM).
+Molecular weights for each molecule:
+
+```{r}
+molMass <-
+  c(
+    Glimepiride = 490.617,
+    Glipizide = 445.536,
+    Glyburide = 494.004,
+    Sulfadiazine = 250.278
+  )
+```
+
+Apply to table.
+
+```{r}
+tabInvitroSfuSensitivity[, soluteMoleMass := molMass[Solute]]
+tabInvitroSfuSensitivity[, ConcentrationMillimolar := 
+                           1000 * Concentration / soluteMoleMass]
+tabInvitroSfuSensitivity[is.na(ConcentrationMillimolar),
+                         ConcentrationMillimolar := 0.0]
+```
+
+
+## Quality Control EDA
+
+Check controls
+
+```{r}
+tabInvitroSfuSensitivity %>% 
+  .[(Solute == "None")] %>% 
+  .[(SolventPercent <= 3)] %>% 
+  copy %>% setorder(repgrp, Hours) %>% 
+  ggplot(aes(Hours, OD, group = repgrp)) +
+  facet_grid(Strain ~ Inoculation) +
+  geom_path(size = 0.1) +
+  scale_color_brewer(palette = "Set2") +
+  theme(
+    panel.border = element_blank(),
+    panel.grid = element_blank(),
+    legend.position = "bottom") +
+  ggtitle("Controls only. Spaghetti dump")
+
+# Compare number of replicates making it beyond a trivial OD
+# (this is a crude indicator of "growth", one which we'll refine later on)
+# Clearly the inoculated conditions surpass an OD threshold 
+# much more frequently than the NIC.
+tabInvitroSfuSensitivity %>% 
+  .[(Solute == "None")] %>% 
+  .[(SolventPercent <= 3)] %>% 
+  copy %>% 
+  .[, .(frac = uniqueN(repgrp[(OD > 0.2)]) / uniqueN(repgrp)), 
+    by = .(Strain, Inoculation)] %>% 
+  ggplot(aes(Inoculation, frac)) +
+  facet_wrap(~Strain, nrow = 1) +
+  geom_col()
+```
+
+Effect of DMSO.
+
+`SolventPercent` is final DMSO percentage in the growth media,
+the carryover from preparation of the dilution series stock.
+(SFUs have very low solubility in water, but manageable in DMSO).
+
+```{r}
+tabInvitroSfuSensitivity %>% 
+  .[(Solute == "None")] %>% 
+  .[(Inoculation == "Inoculated")] %>% 
+  copy %>% 
+  ggplot(aes(Hours, OD, group = repgrp, 
+             color = SolventPercent)) +
+  facet_grid(Strain ~ SolventPercent) +
+  geom_path(size = 0.1) +
+  theme(
+    panel.border = element_blank(),
+    panel.grid = element_blank(),
+    legend.position = "bottom") +
+  ggtitle("Inoculated controls only. Spaghetti dump")
+```
+
+A little hard to read, so can convert to fraction above threshold
+as with the inoculation comparison.
+
+```{r}
+tabInvitroSfuSensitivity %>% 
+  .[(Solute == "None")] %>% 
+  .[(Inoculation == "Inoculated")] %>% 
+  .[, .(frac = uniqueN(repgrp[(OD > 0.2)]) / uniqueN(repgrp)), 
+    by = .(Strain, SolventPercent)] %>% 
+  setorder(Strain, SolventPercent) %>% 
+  ggplot(aes(SolventPercent, frac)) +
+  facet_grid(Strain ~ .) +
+  geom_path(size = 2) +
+  geom_col() +
+  theme(
+    panel.border = element_blank(),
+    panel.grid = element_blank(),
+    legend.position = "bottom") +
+  ggtitle("Inoculated controls only.")
+```
+
+For these strains, growth tends to fall off of a cliff above 3% DMSO.
+
+Drop the exploratory high DMSO concentrations that are not
+useful for comparative controls in the analysis
+
+```{r}
+tabInvitroSfuSensitivity %>% nrow()
+tabInvitroSfuSensitivity <- 
+  tabInvitroSfuSensitivity[(SolventPercent <= 3)]
+tabInvitroSfuSensitivity %>% nrow()
+```
+
+
+## Extract growth window
+
+```{r}
+################################################################################
+#' Mask raw growth plate OD data to just the main growth phase 
+#' 
+#' While other features might be interesting or useful in special cases,
+#' essentially all growth-curve experiments need to estimate parameters
+#' related to the exponential(ish) period of growth.
+#' The goal of this function is to apply rules that do a pretty good job
+#' of finding this region of the data most of the time,
+#' even in the presence of some funny business in the curves.
+#' 
+#' @param odtab A data.table with at least the following columns:
+#'  `Hours`, `OD`, `WellID`. 
+#' @param chunkMinHours Minimum duration for a valid growth phase, in hours.
+#' @param minRangeOd Minimum range for a valid growth phase, in units of OD.
+#' 
+#' @return 
+#' A named list with two tables.
+#' 
+#' - `growth` -- a [data.table] with only entries determined 
+#' to be part of the main growth phase.
+#' - `annotated` -- a [data.table] with all original entries, 
+#' as well as new annotation columns that were created
+#' as part of the growth-phase detection process.
+#' 
+#' importFrom pspline sm.spline predict.sm.spline
+#' 
+#' @import pspline
+#' 
+mask_growth_od = function(odtab, chunkMinHours = 1.5, minRangeOd = 0.02){
+  require(pspline)
+  newtab <-
+    odtab %>% copy %>%
+    # Enforce order on Hours
+    setorder(Hours) %>%
+    # Sanitize values for smoothing-spline 
+    .[is.finite(Hours)] %>% 
+    .[is.finite(OD)] %>% 
+    # Smoothed-OD for empirical derivative is the way to go
+    # otherwise noise can give you spurious changes in sign
+    .[, odSpline := predict(sm.spline(Hours, OD), Hours, 0)] %>%
+    .[, diff1 := predict(sm.spline(Hours, OD), Hours, 1)] %>%
+    .[, diff2 := predict(sm.spline(Hours, OD), Hours, 2)] %>%
+    # Note if derv is pos
+    .[, PositiveDiff1 := diff1 > 0.0] %>%
+    # Label "chunks" based on if we're in a change from negative/zero to positive
+    .[, previous := shift(PositiveDiff1, type = "lag", fill = TRUE)] %>%
+    .[, AddChunkCounter := PositiveDiff1 == TRUE & previous == FALSE] %>%
+    .[, Chunk := cumsum(AddChunkCounter)] %>%
+    # Compute Chunk range-difference
+    .[, ChunkRangeDiff := max(OD, na.rm = TRUE) - min(OD, na.rm = TRUE), by = "Chunk"] %>%
+    # Compute duration
+    .[, chunkDuration := 
+        max(Hours[PositiveDiff1], na.rm = TRUE) - 
+        min(Hours[PositiveDiff1], na.rm = TRUE), by = "Chunk"] %>% 
+    # Compute the sum of positive-diff1 (~auc with even spacing)
+    .[, ChunkSumPositive := sum(diff1[diff1 > 0.0], na.rm = TRUE), by = "Chunk"]
+  # Define the masked data only
+  growthTab <-
+    newtab %>% copy %>% 
+    # Filter on duration
+    .[(chunkDuration >= chunkMinHours)] %>% 
+    # Consider only big-enough range diff1
+    .[(ChunkRangeDiff > minRangeOd)] %>% 
+    # Select the chunk with largest integral approximation for positive diff1
+    .[ChunkSumPositive == max(ChunkSumPositive, na.rm = TRUE)] %>% 
+    # Include only positive diff1
+    .[(PositiveDiff1)]
+  # For debugging purposes later,
+  # return a list with both the full annotated table,
+  # as well as the masked table
+  return(
+    list(
+      growth = growthTab, 
+      annotated = newtab)
+  )
+}
+```
+
+```{r}
+tabGrowthMask <- 
+  tabInvitroSfuSensitivity %>% 
+  # split(by = c("Round", "Strain", "plateType", "WellID")) %>%
+  split(by = "repgrp") %>%
+  lapply(FUN = function(x){
+    suppressWarnings(
+      # Annotate regions of the growth curve for param interpretation
+      # This creates two results tables: `$growth` and `$annotated`
+      mask_growth_od(x) %>% .$growth
+    )
+  }) %>% 
+  rbindlist(use.names = TRUE, idcol = ".check")
+# Sanity check
+setorder(tabGrowthMask, Strain, Round, plateType, WellID, Hours)
+tabGrowthMask %>% 
+  .[, .SD[.N],  by = .(Strain, Round, plateType, WellID)] %>% 
+  .[, .(Strain, Round, plateType, WellID, Hours, OD, odSpline)] %>% 
+  .[sort(sample(.N, 10))] %>% 
+  knitr::kable()
+# # Define each time-step. Have to order first.
+setorder(tabGrowthMask, Strain, Round, plateType, WellID, Hours)
+# Baseline subtract the OD. 
+# Since this is already masked to the presumed growth window, 
+# and up-sorted by time, the first value 
+# is the beginning of the growth window 
+# and should be subtracted from all (by well).
+tabGrowthMask[, OdSplineBaselineSubtract := odSpline - odSpline[1], 
+              by = .(Strain, Round, plateType, WellID)]
+# In case it dipped below zero, don't want to 
+# skew later calculations (e.g. AUC, etc).
+# Set to zero
+tabGrowthMask[(OdSplineBaselineSubtract < 0.0), 
+              OdSplineBaselineSubtract := 0.0]
+
+tabInvitroSfuSensitivity %>% nrow()
+tabGrowthMask %>% nrow()
+```
+
+Annotate the titration rank order within each replication group.
+
+```{r}
+tabTitrationStep <-
+  tabGrowthMask %>% 
+  .[, .(Strain, Round, plateType, Solute, Concentration)] %>% 
+  unique() %>% 
+  setorder(Strain, Round, plateType, Solute, Concentration) %>% 
+  .[, Titration := seq(1, .N, 1),
+    by = .(Strain, Round, plateType, Solute)]
+# Add back via join
+tabGrowthMask <-
+  tabTitrationStep[tabGrowthMask, 
+                   on = .(Strain, Round, plateType, Solute, Concentration)]
+# enforce order again after join.
+setorder(tabGrowthMask, Strain, Round, plateType, WellID, Hours)
+```
+
+Summarize replicates, SFUs, design by round.
+
+```{r}
+tabGrowthMask %>% 
+  .[(Solute != "None")] %>% 
+  .[, .(N = uniqueN(WellID)), 
+    by = .(Strain, Solute, SolventPercent, Round, plateType)] %>% 
+  dcast.data.table(SolventPercent + Round + plateType + Solute ~ Strain, 
+                   value.var = "N", fun.aggregate = sum) %>% 
+  setnames("SolventPercent", "DMSO(%)") %>% 
+  knitr::kable()
+```
+
+Show extracted portion of growth curve.
+Much easier to see the design by round and DMSO%.
+The solutes (SFUs) and their concentrations are not mapped on, 
+but the difference in lag and spread is already apparent
+at a high level.
+
+```{r}
+tabGrowthMask %>% 
+  .[(Inoculation == "Inoculated")] %>% 
+  setorder(Strain, Round, plateType, WellID, Hours) %>%
+  ggplot(aes(Hours, OdSplineBaselineSubtract, 
+             color = Round,
+             group = repgrp)) + 
+  facet_grid(Strain ~ SolventPercent, labeller = label_both) +
+  geom_path(size = 0.25) +
+  scale_color_brewer(palette = "Set2") +
+  theme(legend.position = "bottom") +
+  theme(panel.grid = element_blank())
+```
+
+- BINF and EHAL were failed runs.
+- 1% DMSO is preferred where available (Rounds 2, 4). 
+- Round 2 did not have BCAA. 
+- Round 4 included only Glyburide.
+
+Remake previous plot but with the obvious cuts for zooming in.
+- drop 3% DMSO
+- drop EHAL, BINF
+- drop sulfadiazine. It tended to be a more severe effect. 
+More anomalies to deal with, and does not need to be in the main figure(s).
+
+Stagger the height so that patterns/problems between rounds are discernible
+
+```{r}
+tabGrowthMask %>% copy %>% 
+  .[(Inoculation == "Inoculated")] %>% 
+  .[(Strain %in% c("AMUC", "CBEI", "CBUT"))] %>%
+  .[(Solute != c("Sulfadiazine"))] %>% 
+  .[(SolventPercent <= 2)] %>% 
+  setorder(Strain, Round, plateType, WellID, Hours) %>%
+  # Stagger rounds on the vertical so that can contrast better
+  .[, OdBgsStagger := OdSplineBaselineSubtract + 
+      as.numeric(gsub("Round", "", Round))] %>% 
+  ggplot(aes(Hours, OdBgsStagger, 
+             color = Round,
+             group = repgrp)) + 
+  facet_grid(Strain ~ SolventPercent, labeller = label_both) +
+  geom_path(size = 0.25) +
+  scale_color_brewer(palette = "Set2") +
+  theme(legend.position = "bottom") +
+  theme(panel.grid = element_blank())
+```
+
+# Fig. 4c, Curation
+
+Zoom in on each strain and growth round.
+
+## Plot, highlight flagged wells
+
+### Function to plot flagged wells 
+
+```{r}
+plot_flag = function(iStrain, iRound, iTabFlag,
+                     tabGm = tabGrowthMask){
+  psr <- tabsr <- NULL
+  # on.exit(return(list(psr, tabsr, iTabFlag, iStrain, iRound)))
+  
+  tabsr <-
+    tabGm %>% copy %>% 
+    .[(Inoculation == "Inoculated")] %>% 
+    .[(Strain == iStrain)] %>% 
+    .[(Solute != c("Sulfadiazine"))] %>% 
+    .[(Round == iRound)] %>% 
+    .[, ConcRound := round(Concentration, digits = 2)] %>% 
+    setorder(Strain, Round, plateType, WellID, Hours)
+  
+  # Define plot
+  psr <-
+    tabsr %>% 
+    ggplot(aes(Hours, OdSplineBaselineSubtract, 
+               color = plateType,
+               # alpha = Concentration,
+               group = repgrp)) + 
+    facet_grid(
+      rows = vars(Titration),
+      cols = vars(Solute)
+    ) +
+    geom_path(alpha = 0.25, size = 0.5) +
+    geom_path(
+      alpha = 1.0, 
+      data = tabsr %>% 
+        .[iTabFlag, on = c("Strain", "Round", "plateType", "WellID")]) +
+    geom_text(
+      size = 2,
+      nudge_x = 2,
+      mapping = aes(label = WellID), 
+      data = tabsr %>% 
+        .[iTabFlag, on = c("Strain", "Round", "plateType", "WellID")] %>%
+        .[, .SD[which.max(Hours)], by = c("plateType", "WellID")]
+    ) +
+    scale_color_brewer(palette = "Set2") +
+    theme(legend.position = "bottom") +
+    theme(panel.grid = element_blank()) +
+    ggtitle(
+      label = paste(iStrain, 
+                    "+ SFUs, Round", 
+                    gsub("Round", "", iRound)))
+  return(psr)
+}
+```
+
+
+### AMUC curation by round
+
+AMUC, Round 4
+
+```{r}
+tabFlagAmucR4 <-
+"
+Strain Round plateType WellID
+AMUC Round4 wBCAA A08
+AMUC Round4 wBCAA A12
+AMUC Round4 Plain A02
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("AMUC", "Round4", tabFlagAmucR4)
+```
+
+AMUC, Round 3
+
+```{r}
+tabFlagAmucR3 <-
+"
+Strain Round plateType WellID
+AMUC Round3 wBCAA A01
+AMUC Round3 wBCAA A02
+AMUC Round3 wBCAA A03
+AMUC Round3 wBCAA B01
+AMUC Round3 wBCAA B02
+AMUC Round3 wBCAA B03
+AMUC Round3 wBCAA A04
+AMUC Round3 wBCAA A05
+AMUC Round3 wBCAA B06
+AMUC Round3 Plain A03
+AMUC Round3 Plain B03
+AMUC Round3 Plain A09
+AMUC Round3 Plain G03
+AMUC Round3 Plain G04
+AMUC Round3 Plain G05
+
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("AMUC", "Round3", tabFlagAmucR3)
+```
+
+AMUC, Round 2.
+The impacted growth issues in Round 2 positive controls give pause,
+but helpful to show here, nevertheless.
+
+```{r}
+tabFlagAmucR2 <-
+"
+Strain Round plateType WellID
+AMUC Round2 Plain E01
+AMUC Round2 Plain A02
+AMUC Round2 Plain B02
+AMUC Round2 Plain E04
+AMUC Round2 Plain D08
+AMUC Round2 Plain B08
+AMUC Round2 Plain E08
+AMUC Round2 Plain A07
+AMUC Round2 Plain C07
+AMUC Round2 Plain E07
+AMUC Round2 Plain B07
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("AMUC", "Round2", tabFlagAmucR2)
+```
+
+
+### CBUT curation by round
+
+CBUT, Round 4
+
+```{r}
+tabFlagCbutR4 <-
+"
+Strain Round plateType WellID
+CBUT Round4 wBCAA D12
+CBUT Round4 Plain C01
+CBUT Round4 Plain B01
+CBUT Round4 Plain B03
+CBUT Round4 Plain B04
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("CBUT", "Round4", tabFlagCbutR4)
+```
+
+CBUT, Round 3.
+Positive controls weirdly lower yield than usual.
+This is a challenging run for CBUT.
+Plucking out the most egregious anomalies, anyway.
+Looks like the impact growth + SFU was a pretty severe insult.
+BCAA didn't rescue anything here, either.
+
+```{r}
+tabFlagCbutR3 <-
+"
+Strain Round plateType WellID
+CBUT Round3 Plain A02
+CBUT Round3 Plain A03
+CBUT Round3 Plain A07
+CBUT Round3 Plain A09
+CBUT Round3 Plain E04
+CBUT Round3 Plain C07
+CBUT Round3 wBCAA A05
+CBUT Round3 wBCAA A07
+CBUT Round3 wBCAA A08
+CBUT Round3 wBCAA B01
+CBUT Round3 wBCAA B02
+CBUT Round3 wBCAA B03
+CBUT Round3 wBCAA B04
+CBUT Round3 wBCAA B05
+CBUT Round3 wBCAA B06
+CBUT Round3 wBCAA B07
+CBUT Round3 wBCAA B08
+CBUT Round3 wBCAA B09
+CBUT Round3 wBCAA C07
+CBUT Round3 wBCAA C08
+CBUT Round3 wBCAA C09
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("CBUT", "Round3", tabFlagCbutR3)
+```
+
+CBUT, Round 2.
+This looks respectably clean. 
+The effect appears to be mostly noticeable 
+at the highest concentration in this smaller titration.
+Looks like a couple controls had an issue, but otherwise fine.
+
+```{r}
+# CBUT Round2 Plain G07
+# CBUT Round2 Plain F09
+# CBUT Round2 Plain F10
+tabFlagCbutR2 <-
+"
+Strain Round plateType WellID
+CBUT Round2 Plain G09
+CBUT Round2 Plain F11
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("CBUT", "Round2", tabFlagCbutR2)
+```
+
+CBUT, Round 1.
+Some early-clipped curves could affect the lag calculation,
+but the aggregated curve would be fine 
+and the sd between replicates look good.
+This spans a range of nearly no effect to clearly pretty big effect, 
+despite the relatively large impact of 3% DMSO.
+
+```{r}
+tabFlagCbutR1 <-
+"
+Strain Round plateType WellID
+CBUT Round1 Plain B03
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("CBUT", "Round1", tabFlagCbutR1)
+```
+
+
+### CBEI curation by rounds
+
+CBEI, Round 4
+
+```{r}
+tabFlagCbeiR4 <-
+"
+Strain Round plateType WellID
+CBEI Round4 Plain B04
+CBEI Round4 Plain G04
+CBEI Round4 Plain C01
+CBEI Round4 wBCAA F09
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("CBEI", "Round4", tabFlagCbeiR4)
+```
+
+CBEI, Round 3
+
+```{r}
+tabFlagCbeiR3 <-
+"
+Strain Round plateType WellID
+CBEI Round3 Plain G07
+CBEI Round3 Plain F01
+CBEI Round3 Plain A01
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("CBEI", "Round3", tabFlagCbeiR3)
+```
+
+CBEI, Round 2
+
+```{r}
+tabFlagCbeiR2 <-
+"
+Strain Round plateType WellID
+CBEI Round2 Plain A07
+CBEI Round2 Plain B07
+CBEI Round2 Plain E07
+CBEI Round2 Plain B02
+CBEI Round2 Plain E02
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("CBEI", "Round2", tabFlagCbeiR2)
+```
+
+
+### EHAL curation by round
+
+EHAL, Round 5
+
+```{r}
+tabFlagEhalR5 <-
+"
+Strain Round plateType WellID
+EHAL Round5 Plain E10
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("EHAL", "Round5", tabFlagEhalR5)
+plotly::ggplotly()
+```
+
+### BINF curation by round
+
+BINF, Round 5
+
+```{r}
+tabFlagBinfR5 <-
+"
+Strain Round plateType WellID
+BINF Round5 Plain A01
+BINF Round5 Plain A04
+BINF Round5 Plain A10
+BINF Round5 Plain A12
+" %>% 
+  fread(stringsAsFactors = FALSE)
+plot_flag("BINF", "Round5", tabFlagBinfR5)
+plotly::ggplotly()
+```
+
+
+
+# Whale plots
+
+Define whale plot function,
+to simplify and enforce consistency plot summaries.
+
+```{r}
+plot_whale = function(tab1, 
+                      title = "", 
+                      rangeOrSmooth = "range", 
+                      smoothSpan = 0.5, 
+                      seLevel = 0.99,
+                      ctlMaxHrsDmso = Inf,
+                      ctlMaxHrsWater = Inf,
+                      alphaWhale = 0.25){
+  p1 <- tab1WaterOnly <- tab1DmsoOnly <- tab1ConcLabel <- NULL
+  tab1WaterOnly <-
+    tab1 %>% copy %>% 
+    # Omit the water-only (no DMSO) control from main data
+    .[(Solvent == "Water")] %>% 
+    # Only control
+    .[(Solute == "None")] %>% 
+    # Set to NULL so that it shows up everywhere
+    .[, Solute := NULL] %>% 
+    .[, Titration := NULL] %>% 
+    # Trim off weirdness later on in growth curve
+    .[(Hours <= ctlMaxHrsWater)] %>%
+    # Coarse-grain hours to avoid some weird effects.
+    .[, Hours := round(Hours)] %>% 
+    # Compute median, min, max at each hour
+    .[, .(odMed = median(OdSplineBaselineSubtract), 
+          odMin = min(OdSplineBaselineSubtract), 
+          odMax = max(OdSplineBaselineSubtract)), 
+      by = .(Strain, Round, plateType, Hours)]
+  tab1DmsoOnly <-
+    tab1 %>% copy %>% 
+    # Omit the water-only (no DMSO) control from main data
+    .[(Solvent == "DMSO")] %>% 
+    # Only control
+    .[(Solute == "None")] %>% 
+    # Set to NULL so that it shows up everywhere
+    .[, Solute := NULL] %>% 
+    .[, Titration := NULL] %>% 
+    # Trim off weirdness later on in growth curve
+    .[(Hours <= ctlMaxHrsDmso)] %>%
+    # Coarse-grain hours to avoid some weird effects.
+    .[, Hours := round(Hours)] %>%
+    # Compute median, min, max at each hour
+    .[, .(odMed = median(OdSplineBaselineSubtract), 
+          odMin = min(OdSplineBaselineSubtract), 
+          odMax = max(OdSplineBaselineSubtract)), 
+      by = .(Strain, Round, plateType, Hours)]
+
+  # Table for inscribing the SFU concentration on each facet
+  tab1ConcLabel <-
+    tab1 %>% copy %>% 
+    # Filter controls to max hours
+    .[!(Solute == "None" & Hours > ctlMaxHrsWater)] %>% 
+    # Set dummy Hours and OD values for positioning label
+    .[, Hours := 0.0] %>% 
+    .[, OdSplineBaselineSubtract := max(OdSplineBaselineSubtract)] %>% 
+    # Now that max calculated, filter out controls completely
+    .[(Solute != "None")] %>% 
+    # downselect to take unique-entry table
+    .[, .(Strain, Round, SolventPercent, plateType,
+          Solute, Titration, ConcentrationMillimolar,
+          Hours, OdSplineBaselineSubtract)] %>% 
+    unique() %>% 
+    # text for printing on panel
+    # Solute Concentration
+    .[, showConc := round(ConcentrationMillimolar, digits = 2)] # %>% paste0(., " [mM]\nDMSO: ", SolventPercent, "%")]
+  
+  # Define plot
+  p1 <-
+    tab1 %>%
+    # Omit the controls for now (will highlight region on all facets)
+    .[(Solute != "None")] %>% 
+    setorder(Strain, Round, plateType, WellID, Hours) %>% 
+    ggplot(aes(Hours, OdSplineBaselineSubtract, 
+               color = plateType)) + 
+    facet_grid(
+      rows = vars(Titration),
+      cols = vars(Solute)
+    )
+  ## Add control layers
+  # DMSO control
+  if(rangeOrSmooth == "range"){
+    p1 <- p1 +
+      geom_ribbon(
+        data = tab1DmsoOnly,
+        color = NA,
+        fill = "darkgreen",
+        size = 0.1,
+        alpha = alphaWhale,
+        mapping = aes(y = odMed, ymin = odMin, ymax = odMax)
+      )
+  } else {
+    p1 <- p1 +
+      stat_smooth(
+        geom = "ribbon",
+        color = NA,
+        span = smoothSpan,
+        level = seLevel,
+        data = tab1 %>% copy %>% 
+          # Omit the water-only (no DMSO) control from main data
+          .[(Solvent == "DMSO")] %>% 
+          # Only control
+          .[(Solute == "None")] %>% 
+          # Trim off weirdness later on in growth curve
+          .[(Hours <= ctlMaxHrsDmso)] %>%
+          # Set to NULL so that it shows up everywhere
+          .[, Solute := NULL] %>% 
+          .[, Titration := NULL],
+        se = TRUE,
+        fill = "darkgreen",
+        alpha = alphaWhale
+      )
+  }
+  # No-DMSO / 'Water' control
+  if(rangeOrSmooth == "range"){
+    p1 <- p1 +
+      geom_ribbon(
+        data = tab1WaterOnly,
+        color = NA,
+        fill = "darkblue",
+        size = 0.1,
+        alpha = alphaWhale,
+        mapping = aes(y = odMed, ymin = odMin, ymax = odMax)
+      )
+  } else {
+    p1 <- p1 +
+      stat_smooth(
+        geom = "ribbon",
+        color = NA,
+        span = smoothSpan,
+        level = seLevel,
+        data = tab1 %>% copy %>% 
+          # Omit the water-only (no DMSO) control from main data
+          .[(Solvent == "Water")] %>% 
+          # Only control
+          .[(Solute == "None")] %>% 
+          # Trim off weirdness later on in growth curve
+          .[(Hours <= ctlMaxHrsWater)] %>%
+          # Set to NULL so that it shows up everywhere
+          .[, Solute := NULL] %>% 
+          .[, Titration := NULL],
+        se = TRUE,
+        fill = "darkblue",
+        alpha = alphaWhale
+      )
+  }
+  p1 <- p1 +
+    # "the data"
+    geom_path(
+      mapping = aes(
+        group = paste(Strain, Round, plateType, WellID), 
+        y = OdSplineBaselineSubtract),
+      alpha = 1, 
+      size = 0.5) +
+    scale_color_manual(values = c(Plain = "black", wBCAA = "brown")) +
+    # Add label for concentration of this panel row
+    geom_text(
+      data = tab1ConcLabel,
+      color = "black",
+      mapping = aes(
+        y = OdSplineBaselineSubtract,
+        label = showConc),
+      hjust = 0,
+      vjust = 1,
+      size = 2.2,
+      alpha = 0.5
+    ) +
+    # scale_color_brewer(palette = "Set2") +
+    ylab("OD (spline-smooth, baseline subtracted)") +
+    # Set a consistent number of y-axis breaks
+    scale_y_continuous(
+      breaks = scales::breaks_pretty(n = 2)
+      # breaks = scales::breaks_extended(2, m = 2)
+      # breaks = scales::breaks_extended(2)
+    ) + 
+    theme(
+      legend.position = "none",
+      strip.text.y = element_blank()
+    ) +
+    theme(panel.grid = element_blank())
+  if(title != ""){
+    p1 <- p1 + ggtitle(label = title)
+  }
+  return(p1)
+}
+```
+
+filter function
+
+```{r}
+filter_whale = function(tabGm, iStrain, iRound){
+  tabWhale <-
+    tabGm %>% copy %>% 
+    .[(Inoculation == "Inoculated")] %>% 
+    .[(Strain == iStrain)] %>% 
+    .[(Solute != c("Sulfadiazine"))] %>% 
+    .[(Round == iRound)] %>% 
+    .[, ConcRound := round(Concentration, digits = 2)] %>% 
+    setorder(Strain, Round, plateType, WellID, Hours)
+  return(tabWhale)
+}
+```
+
+## Whale plots, AMUC
+
+```{r}
+plot_whale(
+  tabGrowthMask %>% 
+    filter_whale("AMUC", "Round2") %>% 
+    .[!tabFlagAmucR2,
+      on = c("Strain", "Round", "plateType", "WellID")], 
+  title = "AMUC, Round 2")
+pWhaleAmucR3 <- 
+  plot_whale(
+    tabGrowthMask %>% 
+      filter_whale("AMUC", "Round3") %>% 
+      .[!tabFlagAmucR3, 
+        on = c("Strain", "Round", "plateType", "WellID")] %>% 
+      .[(plateType == "Plain")],
+    rangeOrSmooth = "range",
+    # smoothSpan = 3, seLevel = 0.99999,
+    ctlMaxHrsDmso = 50, 
+    ctlMaxHrsWater = 38,
+    title = "AMUC, Round 3")
+pWhaleAmucR3
+plot_whale(
+  tabGrowthMask %>% 
+    filter_whale("AMUC", "Round4") %>% 
+    .[!tabFlagAmucR4,
+      on = c("Strain", "Round", "plateType", "WellID")] %>%
+    .[(plateType == "Plain")],
+  ctlMaxHrsDmso = 45,
+  ctlMaxHrsWater = 38, 
+  title = "AMUC, Round 4")
+```
+
+Whale plots, CBUT
+
+```{r}
+plot_whale(
+  tabGrowthMask %>% 
+    filter_whale("CBUT", "Round1") %>% 
+    .[!tabFlagCbutR1,
+      on = c("Strain", "Round", "plateType", "WellID")],
+  title = "CBUT, Round 1")
+plot_whale(
+  tabGrowthMask %>% 
+    filter_whale("CBUT", "Round2") %>% 
+    .[!tabFlagCbutR2,
+      on = c("Strain", "Round", "plateType", "WellID")], 
+  title = "CBUT, Round 2",
+  ctlMaxHrsDmso = 15,
+  ctlMaxHrsWater = 15,
+  rangeOrSmooth = "smooth",
+  smoothSpan = 0.5)
+plot_whale(
+  tabGrowthMask %>% 
+    filter_whale("CBUT", "Round3") %>%
+    .[!tabFlagCbutR3,
+      on = c("Strain", "Round", "plateType", "WellID")] %>%
+    # drop BCAA condition for plotting purposes
+    .[(plateType == "Plain")],
+  ctlMaxHrsDmso = 25,
+  ctlMaxHrsWater = 20,
+  title = "CBUT, Round 3",
+  rangeOrSmooth = "smooth",
+  smoothSpan = 0.5)
+plot_whale(
+    tabGrowthMask %>% 
+    filter_whale("CBUT", "Round4") %>%
+    # Counter-select the flagged wells
+    .[!tabFlagCbutR4,
+      on = c("Strain", "Round", "plateType", "WellID")] %>%
+    # drop BCAA condition for plotting purposes
+    .[(plateType == "Plain")],
+  ctlMaxHrsDmso = 25,
+  ctlMaxHrsWater = 20,
+  title = "CBUT, Round 4",
+  rangeOrSmooth = "smooth",
+  smoothSpan = 0.5)
+```
+
+Whale plots, CBEI
+
+```{r}
+plot_whale(
+  tabGrowthMask %>% 
+    filter_whale("CBEI", "Round2") %>% 
+    .[!tabFlagCbeiR2,
+      on = c("Strain", "Round", "plateType", "WellID")],
+  title = "CBEI, Round 2")
+
+plot_whale(
+  tabGrowthMask %>% 
+    filter_whale("CBEI", "Round3") %>% 
+    # drop BCAA condition for plotting purposes
+    .[(plateType == "Plain")] %>% 
+    .[!tabFlagCbeiR3,
+      on = c("Strain", "Round", "plateType", "WellID")],
+  ctlMaxHrsDmso = 19,
+  title = "CBEI, Round 3")
+
+plot_whale(
+  tabGrowthMask %>% 
+    filter_whale("CBEI", "Round4") %>% 
+    # drop BCAA condition for plotting purposes
+    .[(plateType == "Plain")] %>% 
+    .[!tabFlagCbeiR4,
+      on = c("Strain", "Round", "plateType", "WellID")],
+  title = "CBEI, Round 4")
+```
+
+Whale plot, EHAL
+
+```{r}
+plot_whale(
+  tabGrowthMask %>% 
+    filter_whale("EHAL", "Round5") %>% 
+    # No BCAA condition, showing this explicitly
+    .[(plateType == "Plain")] %>% 
+    .[!tabFlagEhalR5,
+      on = c("Strain", "Round", "plateType", "WellID")],
+  title = "EHAL, Round 5")
+```
+
+Whale plot, BINF
+
+```{r}
+plot_whale(
+  tabGrowthMask %>% 
+    filter_whale("BINF", "Round5") %>% 
+    # No BCAA condition, showing this explicitly
+    .[(plateType == "Plain")] %>% 
+    .[!tabFlagBinfR5,
+      on = c("Strain", "Round", "plateType", "WellID")],
+  title = "BINF, Round 5")
+```
+
+
+
+
+
+## Pick representative slices for main figure
+
+This entire report is being shared as supplementary figure,
+for reference and to document the data censoring choices.
+The goal of slicing here is to pick a representative combination
+that accurately communicates the inhibition (or lack thereof)
+without extraneous idiosyncracies that distract 
+from the relative ranking and qualitative outcome. 
+
+Also, only so many panels will fit in a main figure plot.
+
+```{r}
+pWhaleMainAmuc <-
+  plot_whale(
+    tabGrowthMask %>% 
+      filter_whale("AMUC", "Round3") %>% 
+      .[!tabFlagAmucR3, 
+        on = c("Strain", "Round", "plateType", "WellID")] %>% 
+      .[(plateType == "Plain")] %>% 
+      .[(Solute == "Glimepiride" & Titration %in% c(2, 3, 4) |
+           Solute == "Glipizide" & Titration %in% c(2, 3, 4) |
+           Solute == "Glyburide" & Titration %in% c(2, 3, 4) |
+           Solute == "None")], 
+    rangeOrSmooth = "range",
+    ctlMaxHrsDmso = 50, 
+    ctlMaxHrsWater = 38,
+    title = "AMUC")
+pWhaleMainAmuc
+
+pWhaleMainCbut <-
+  plot_whale(
+    tabGrowthMask %>% 
+      filter_whale("CBUT", "Round1") %>% 
+      .[!tabFlagCbutR1, 
+        on = c("Strain", "Round", "plateType", "WellID")] %>% 
+      .[(plateType == "Plain")] %>% 
+      .[(Solute == "Glimepiride" & Titration %in% c(2, 3, 4) |
+           Solute == "Glipizide" & Titration %in% c(2, 3, 4) |
+           Solute == "Glyburide" & Titration %in% c(1, 2, 3) |
+           Solute == "None")] %>% 
+      # update titration rank 
+      # so that there are not extra dummy rows in the final plot
+      .[(Solute == "Glyburide"), Titration := Titration + 1L],
+    rangeOrSmooth = "range",
+    title = "CBUT")
+pWhaleMainCbut
+
+pWhaleMainCbei <-
+  plot_whale(
+    tabGrowthMask %>% 
+      filter_whale("CBEI", "Round3") %>% 
+      .[!tabFlagCbutR1, 
+        on = c("Strain", "Round", "plateType", "WellID")] %>% 
+      .[(plateType == "Plain")] %>% 
+      .[(Solute == "Glimepiride" & Titration %in% c(1, 2, 3) |
+           Solute == "Glipizide" & Titration %in% c(1, 2, 3) |
+           Solute == "Glyburide" & Titration %in% c(1, 2, 3) |
+           Solute == "None")], 
+      # .[, Titration := 0],
+    rangeOrSmooth = "range",
+    ctlMaxHrsDmso = 19, 
+    ctlMaxHrsWater = Inf,
+    title = "CBEI")
+pWhaleMainCbei
+
+pWhaleMainBinf <-
+  plot_whale(
+    tabGrowthMask %>% 
+      filter_whale("BINF", "Round5") %>% 
+      .[!tabFlagBinfR5, 
+        on = c("Strain", "Round", "plateType", "WellID")] %>% 
+      .[(Hours < 18)] %>% 
+      .[(plateType == "Plain")] %>% 
+      .[(Solute == "Glimepiride" & Titration %in% c(3, 4, 5) |
+           Solute == "Glipizide" & Titration %in% c(3, 4, 5) |
+           Solute == "Glyburide" & Titration %in% c(3, 4, 5) |
+           Solute == "None")], 
+      # .[, Titration := 0],
+    rangeOrSmooth = "range",
+    ctlMaxHrsDmso = 17, 
+    ctlMaxHrsWater = 17,
+    title = "BINF")
+pWhaleMainBinf
+
+pWhaleMainEhal <-
+  plot_whale(
+    tabGrowthMask %>% 
+      filter_whale("EHAL", "Round5") %>% 
+      .[!tabFlagEhalR5, 
+        on = c("Strain", "Round", "plateType", "WellID")] %>% 
+      .[(plateType == "Plain")] %>% 
+      .[(Solute == "Glimepiride" & Titration %in% c(3, 4, 5) |
+           Solute == "Glipizide" & Titration %in% c(3, 4, 5) |
+           Solute == "Glyburide" & Titration %in% c(3, 4, 5) |
+           Solute == "None")], 
+      # .[, Titration := 0],
+    rangeOrSmooth = "range",
+    ctlMaxHrsDmso = Inf, 
+    ctlMaxHrsWater = Inf,
+    title = "EHAL")
+pWhaleMainEhal
+```
+
+
+# Build Figure 5
+
+```{r pFig5, fig.width=6.7, fig.height=8.9}
+layout <- "
+AAABBBBB
+AAABBBBB
+AAABBBBB
+CCCCCCCC
+CCCCCCCC
+CCCCCCCC
+"
+whalePlotStripSize <- 6
+whalePlotTitleSize <- 6
+whalePlotAxisSize <- 6
+pFig5 <- NULL
+pFig5 <-
+  (
+    pSfuA1c +
+      theme(
+        # plot.title = element_text(hjust = 0, size = 5),
+        strip.text = element_text(hjust = 0, size = 6),
+        axis.title = element_blank(),
+        axis.text.x = element_text(hjust = 0.5, size = 6),
+        axis.text.y = element_text(hjust = 1, size = 6)
+      )
+  ) + 
+  (
+    pTestsBwGrp + 
+      theme(
+        plot.title = element_blank(), 
+        axis.title = element_blank(),
+        axis.text.x = element_text(hjust = 0.5, size = 6),
+        axis.text.y = element_text(hjust = 1, size = 6),
+        strip.text = element_text(hjust = 0, size = 6)
+      )
+  ) +
+  (
+    (pWhaleMainAmuc + 
+       ylab("OD\n600 nm") +
+       theme(
+         title = element_text(size = whalePlotTitleSize),
+         strip.text = element_text(size = whalePlotStripSize),
+         axis.text = element_text(size = whalePlotAxisSize),
+         axis.title.y = element_text(
+           margin = margin(r = 10, unit = "pt"),
+           angle = 0, 
+           hjust = 1, 
+           vjust = 1, 
+           size = 6), 
+         axis.title.x = element_blank()
+       )
+    ) +
+      (pWhaleMainBinf + 
+         theme(
+           title = element_text(size = whalePlotTitleSize),
+           strip.text = element_text(size = whalePlotStripSize),
+           axis.text = element_text(size = whalePlotAxisSize),
+           axis.title.y = element_blank(), 
+           axis.title.x = element_blank())
+      ) +
+      (pWhaleMainCbei + 
+         theme(
+           title = element_text(size = whalePlotTitleSize),
+           strip.text = element_text(size = whalePlotStripSize),
+           axis.text = element_text(size = whalePlotAxisSize),
+           axis.title.y = element_blank(), 
+           axis.title.x = element_blank()
+         )
+      ) +
+      (pWhaleMainCbut + 
+         theme(
+           title = element_text(size = whalePlotTitleSize),
+           strip.text = element_text(size = whalePlotStripSize),
+           axis.text = element_text(size = whalePlotAxisSize),
+           axis.title.y = element_blank(),
+           axis.title.x = element_blank())
+      ) +
+      (pWhaleMainEhal + 
+         theme(
+           title = element_text(size = whalePlotTitleSize),
+           strip.text = element_text(size = whalePlotStripSize),
+           axis.text = element_text(size = whalePlotAxisSize),
+           axis.title.y = element_blank(), 
+           axis.title.x = element_text(size = 6)
+         )
+      ) +
+      plot_layout(nrow = 2)
+  ) +
+  plot_layout(design = layout) +
+  plot_annotation(tag_levels = list(letters[1:3])) &
+  theme(plot.tag = element_text(size = 8, face = "bold", family = "Sans"))
+# pFig5
+# Journal guided formatting, dimensions, font sizes
+figHeight = 225
+```
+
+Save to standalone figure files.
+
+```{r ggsaves}
+ggsave("Figure-05.pdf", pFig5, 
+       device = cairo_pdf,
+       width = 170,
+       # Have room up to 200 or so?
+       height = figHeight, 
+       dpi = 300, 
+       units = "mm")
+```
+
+
