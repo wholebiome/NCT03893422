@@ -5,13 +5,25 @@ Data-sharing repository for Randomized Clinical Trial
 conducted by [Pendulum Therapeutics](https://pendulum.co/)
 (FKA "Whole Biome, Inc.").
 
-For full details, see the peer-reviewed, open access article
+For full details, see our peer-reviewed, open access articles
 in [BMJ Diabetes Research and care](https://drc.bmj.com/content/8/1/e001319):
 
 > Improvements to postprandial glucose control in subjects with type 2 diabetes: a multicenter, double blind, randomized placebo-controlled trial of a novel probiotic formulation. 
 (2020) [8:e001319](https://drc.bmj.com/content/8/1/e001319). 
 doi: [10.1136/bmjdrc-2020-001319](https://doi.org/10.1136/bmjdrc-2020-001319)
 
+and in [BMC Microbiology](https://doi.org/10.1186/s12866-021-02415-8):
+
+> Increased circulating butyrate and ursodeoxycholate 
+during probiotic intervention in humans with type 2 diabetes. 
+(2022) 22, 19
+[ISSN: 1471-2180](https://bmcmicrobiol.biomedcentral.com/articles/10.1186/s12866-021-02415-8).
+doi: [10.1186/s12866-021-02415-8](https://doi.org/10.1186/s12866-021-02415-8)
+
+## Data
+
+- [BMJ 2020](BMJ_DRC_2020_10.1136_bmjdrc-2020-001319/): `BMJ_DRC_2020_10.1136_bmjdrc-2020-001319/`
+- [BMC 2022](BMC_Microbio_2022_10.1186_s12866-021-02415-8/): `BMC_Microbio_2022_10.1186_s12866-021-02415-8/`
 
 ## Brief Summary
 

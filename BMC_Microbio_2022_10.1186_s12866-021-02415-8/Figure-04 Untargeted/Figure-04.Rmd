@@ -1,0 +1,1077 @@
+---
+title: "Figure 04 Untargeted Metabolomics"
+author: "Paul J. McMurdie"
+date: '`r format(Sys.Date(), "%Y-%B-%d")`'
+output: rmdformats::readthedown
+params:
+  tabMetabolonUntgtLong: "../tidy_data/tabMetabolonUntgtLong.RDS"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  error = TRUE, 
+  echo = TRUE, 
+  fig.width = 10, 
+  fig.height = 7)
+```
+
+```{r}
+library("magrittr")
+library("data.table")
+library("ggplot2"); packageVersion("ggplot2")
+library("ggridges"); packageVersion("ggridges")
+library("FactoMineR"); packageVersion("FactoMineR")
+library("factoextra"); packageVersion("factoextra")
+library("patchwork"); packageVersion("patchwork")
+library("ggbeeswarm"); packageVersion("ggbeeswarm")
+# library("ggrepel"); packageVersion("ggrepel")
+```
+
+```{r}
+theme_set(
+  theme_bw() +
+    theme(
+      panel.grid = element_blank(), 
+      axis.ticks = element_line(size = 0.25),
+      strip.background = element_blank(),
+      strip.text.y = element_text(angle = 0)
+    )
+)
+scaleColorManualTreatment <-
+  scale_color_manual(
+    values = 
+      c(
+        placebo = "gray50",
+        wbf10 = "darkblue",
+        wbf11 = "darkgreen"
+      )
+  )
+scaleFillManualTreatment <-
+  scale_fill_manual(
+    values = 
+      c(
+        placebo = "gray50",
+        wbf10 = "darkblue",
+        wbf11 = "darkgreen"
+      )
+  )
+studyArmPretty <- 
+  c(placebo = "Placebo", 
+    wbf10 = "WBF-010", 
+    wbf11 = "WBF-011")
+scaleColorTreatmentManPretty <-
+  scale_color_manual(
+    values = 
+      c(
+        "Placebo" = "gray50",
+        "WBF-010" = "darkblue",
+        "WBF-011" = "darkgreen"
+      )
+  )
+scaleFillTreatmentManPretty <-
+  scale_fill_manual(
+    values = 
+      c(
+        "Placebo" = "gray50",
+        "WBF-010" = "darkblue",
+        "WBF-011" = "darkgreen"
+      )
+  )
+scfaNamePretty <-
+  c("Acetic acid" = "Acetate", 
+    "Propionic acid" = "Propionate", 
+    "Butyric acid" = "Butyrate")
+vecOrderScfa <- 
+  c("Acetic acid", "Propionic acid", "Butyric acid") %>% 
+  rev()
+```
+
+
+# Load data
+
+```{r}
+# long-form table of the untargeted metabolomics data
+tabMetabolonUntgtLong <- readRDS(params$tabMetabolonUntgtLong)
+tabMetabolonUntgtLong %>% dim()
+tabMetabolonUntgtLong$COMP_ID %>% uniqueN()
+```
+
+## Log-ratio
+
+Compute subject-wise Week12, Baseline paired metrics
+
+```{r}
+tabPivEventWide <-
+  tabMetabolonUntgtLong %>% 
+  # pivot wide to ensure consistent handling 
+  # of subject-event-sample and missing
+  dcast.data.table(
+    formula = treatment + Subject + COMP_ID + BIOCHEMICAL ~ Event, 
+    fill = NA, 
+    fun.aggregate = mean,
+    value.var = "ScaledImpData") %>% 
+  # subtract week12 from baseline
+  .[, Week12MinusBaseline := Week12 - Baseline] %>% 
+  .[, log2Wk12OverBaseline := log2(Week12 / Baseline)]
+```
+
+```{r}
+tabPivEventWideOrigScale <-
+  tabMetabolonUntgtLong %>% 
+  # pivot wide to ensure consistent handling 
+  # of subject-event-sample and missing
+  dcast.data.table(
+    formula = treatment + Subject + COMP_ID + BIOCHEMICAL ~ Event, 
+    fill = NA, 
+    # This is needed due to two subjects having a replicate timepoint
+    fun.aggregate = mean,
+    value.var = "OrigScale") %>% 
+  .[, log2RatioOrigScale := log2(Week12 / Baseline)]
+```
+
+Join to add to `tabPivEventWide`.
+This adds explicit `NA` that was 'missing' in `ScaledImpData`.
+
+```{r}
+tabPivEventWide <-
+  tabPivEventWide %>% 
+  .[tabPivEventWideOrigScale[, .(Subject, COMP_ID, BIOCHEMICAL, log2RatioOrigScale)], 
+    on = .(Subject, COMP_ID, BIOCHEMICAL)]
+```
+
+## Missing values
+
+Evaluate, flag, entries that have high number of missing data in an arm,
+or high number of artificial no-change in an arm (log-ratio is zero).
+
+```{r}
+# Tally sums of non-missing values
+tabPivEventWide[, numNonMissing := sum(!is.na(log2RatioOrigScale)), 
+                     by = .(treatment, BIOCHEMICAL)]
+# Tally sums of non-zero log-ratios
+tabPivEventWide[, numNonzeroLogRatio := 
+                  sum(log2Wk12OverBaseline != 0.0, na.rm = TRUE),
+                by = .(treatment, BIOCHEMICAL)]
+```
+
+## Check for differences between arms at baseline
+
+```{r}
+tabMetabolonUntgtLong %>% 
+  .[(Event == "Baseline")] %>% 
+  .[, .(medianSubject = median(ScaledImpData, na.rm = TRUE)), 
+    by = .(treatment, BIOCHEMICAL)] %>% 
+  # Compute differences with placebo
+  .[, .(wbf11 = medianSubject[treatment == "wbf11"] -
+          medianSubject[treatment == "placebo"], 
+        wbf10 = medianSubject[treatment == "wbf10"] -
+          medianSubject[treatment == "placebo"]), 
+    by = "BIOCHEMICAL"] %>% 
+  melt.data.table(id.vars = "BIOCHEMICAL", 
+                  variable.name = "treatment", 
+                  variable.factor = FALSE) %>% 
+  .[, Treatment := studyArmPretty[treatment]] %>% 
+  ggplot(aes(x = value, y = Treatment, fill = Treatment)) +
+  geom_blank(mapping = aes(x = -value)) +
+  # geom_vline(xintercept = 0.0, size = 0.2, color = "gray") +
+  geom_density_ridges(scale = 1.6, rel_min_height = 0.0, alpha = 1.0) +
+  # scale_y_discrete(expand = expansion(mult = c(0.0, 0))) +
+  scaleFillTreatmentManPretty +
+  theme_ridges() +
+  # xlim(-2.5, 2.5) +
+  xlab("Difference between medians at baseline")
+```
+
+Also see PCA of baseline-only values, below.
+
+
+# Fig. 3a-c
+
+Most metabolites aren't different at baseline and don't change
+
+# Fig. 3a median log-ratio distributions
+
+Distribution of medians by arm and biochemical
+
+```{r}
+tabMedianDists <-
+  tabPivEventWide %>% 
+  .[!is.na(log2RatioOrigScale)] %>% 
+  .[!is.na(log2Wk12OverBaseline)] %>% 
+  .[, .(medianLog2Wk12OverBaseline = median(log2Wk12OverBaseline, na.rm = TRUE)), 
+    by = .(treatment, BIOCHEMICAL)]
+```
+
+ggridges summary of distribution of median log-ratios.
+
+```{r}
+pLogRatioRidges <-
+  tabMedianDists %>% copy %>% 
+  .[, Treatment := studyArmPretty[treatment]] %>% 
+  ggplot(aes(x = medianLog2Wk12OverBaseline, y = Treatment, fill = Treatment)) +
+  # geom_vline(xintercept = 0.0, size = 0.2, color = "gray") +
+  geom_density_ridges(scale = 1.6, rel_min_height = 0.0, alpha = 1.0) +
+  scale_y_discrete(expand = expansion(mult = c(0.0, 0))) +
+  scaleFillTreatmentManPretty +
+  xlim(-2.5, 2.5) +
+  # xlab("median Log2-Ratio") +
+  ggtitle(expression(paste(
+    "Median ",
+    log[2](over(Endpoint, Baseline))
+  ))) +
+  theme_ridges(font_size = 13, grid = TRUE) +
+  theme(
+    legend.position = "none",
+    axis.ticks.x = element_blank(),
+    panel.grid.major.x = element_blank(),
+    plot.title = element_text(hjust = 0.5, size = 8),
+    # axis.title.x = element_text(hjust = 0.5),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank()
+  )
+pLogRatioRidges
+```
+
+
+# Fig. 3b QQ Plot
+
+Compare them by arm more directly.
+
+```{r}
+munge_quantiles = function(xx, probSeq = seq(0, 1, by = 0.005)){
+  yy = quantile(
+    x = xx,
+    probs = probSeq,
+    na.rm = TRUE)
+  return(
+    data.table(
+      quantChar = names(yy), 
+      percentile = names(yy) %>% gsub("\\%", "", .) %>% as.numeric(),
+      value = yy)
+  )
+}
+tabMedianDistQs <- NULL
+tabMedianDistQs <-
+  tabMedianDists %>% 
+  .[, munge_quantiles(
+    xx = medianLog2Wk12OverBaseline
+  ), by = .(treatment)] %>% 
+  dcast.data.table(quantChar + percentile ~ treatment, value.var = "value")
+```
+
+## Fig. 3b QQ Plot
+
+Combined qqplot for build
+
+```{r}
+pQqLogRatio <-
+  tabMedianDistQs %>% 
+  melt.data.table(
+    id.vars = c("quantChar", "percentile", "placebo"), 
+    variable.name = "studyArm", 
+    variable.factor = FALSE, 
+    value.factor = FALSE,
+    value.name = "log2Ratio") %>% 
+  setorder(studyArm, percentile) %>% 
+  ggplot(aes(placebo, log2Ratio, color = studyArm)) +
+  geom_abline() +
+  geom_path(size = 1.5) +
+  geom_point(size = 2.5, stroke = 0) +
+  scaleColorManualTreatment +
+  ylab("Formulation") +
+  xlab("Placebo") +
+  ggtitle("Q-Q plot") +
+  theme(
+    legend.position = 'none',
+    panel.grid = element_blank())
+pQqLogRatio
+```
+
+
+# Fig. 3c PCA
+
+Sanity-check that there were not large 
+group-wise structural differences at baseline.
+
+```{r}
+tabUntgtBaselineWide <- NULL
+tabUntgtBaselineWide <-
+  tabMetabolonUntgtLong %>% 
+  .[(Event == "Baseline")] %>% 
+  dcast.data.table(
+    formula = treatment + Subject ~ COMP_ID, 
+    value.var = "ScaledImpData", 
+    fun.aggregate = mean, na.rm = TRUE)
+tabUntgtBaselineWide %>% dim()
+tabUntgtBaselineWide[1:5, 1:5, with = FALSE]
+# Use factominer, factoextra for viz.
+# Perform PCA
+pcaBaseline <- PCA(tabUntgtBaselineWide[, -c(1, 2), with = FALSE],  graph = FALSE)
+```
+
+## Scree plot, baseline
+
+```{r}
+fviz_eig(pcaBaseline) + 
+  theme(
+    panel.grid.major.x = element_blank(), 
+    axis.ticks = element_blank())
+```
+
+Define PCA subject plot for figure
+
+```{r}
+fviz_pca_ind(
+  X = pcaBaseline, 
+  label = "none", 
+  habillage = tabUntgtBaselineWide$treatment %>% factor(),
+  addEllipses = TRUE, 
+  ellipse.level = 0.95
+) +
+  scaleColorManualTreatment +
+  scaleFillManualTreatment +
+  theme(
+    legend.position = "none",
+    plot.title = element_blank(),
+    panel.grid = element_blank()
+  ) + 
+  ggtitle("PCA, baseline-only") +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    panel.grid = element_blank()
+  )
+```
+
+PCA on subject-wise log-ratio values.
+
+```{r}
+tabLogRatioWide <-
+  tabPivEventWide %>%
+  # Pivot even wider
+  dcast.data.table(
+    formula = treatment + Subject ~ COMP_ID, 
+    value.var = "log2Wk12OverBaseline")
+tabLogRatioWide[1:5, 1:5, with = FALSE]
+# Perform PCA
+pcaLogRatio <- PCA(tabLogRatioWide[, -c(1, 2), with = FALSE],  graph = FALSE)
+```
+
+## Scree plot, log-ratio
+
+```{r}
+fviz_eig(pcaLogRatio) + 
+  theme(
+    panel.grid.major.x = element_blank(), 
+    axis.ticks = element_blank())
+```
+
+Define PCA subject plot for figure
+
+```{r}
+pLogRatioPCA <-
+  fviz_pca_ind(
+    X = pcaLogRatio, 
+    label = "none", 
+    habillage = tabLogRatioWide$treatment %>% factor(),
+    addEllipses = TRUE, 
+    ellipse.level = 0.95
+  ) +
+  scaleColorManualTreatment +
+  scaleFillManualTreatment +
+  ggtitle("PCA") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5),
+    panel.grid = element_blank()
+  )
+pLogRatioPCA
+```
+
+
+# Fig. 3d: Between-Group Volcano plot
+
+## WBF-011 - Placebo
+
+```{r}
+tabWilcoxBwGrpWbf11Placebo <- NULL
+# Compute the between-group comparison WBF-011 v. Placebo
+tabWilcoxBwGrpWbf11Placebo <-
+  tabPivEventWide %>% 
+  .[(numNonMissing > 5)] %>% 
+  .[(treatment %in% c("wbf11", "placebo"))] %>% 
+  .[, .(
+    wilcoxOut = list(
+      try(expr = {
+        wilcox.test(
+          x = log2Wk12OverBaseline[(treatment == "wbf11")],
+          y = log2Wk12OverBaseline[(treatment == "placebo")],
+          alternative = "two.sided",
+          conf.int = TRUE,
+          paired = FALSE)
+      }, silent = TRUE)
+    )
+  ), 
+  by = .(BIOCHEMICAL)]
+# Extract key results from test
+extract_wi = function(wilcoxOut){
+  data.table(
+    pvalue = wilcoxOut$p.value,
+    statistic = wilcoxOut$statistic,
+    estimate = wilcoxOut$estimate,
+    confIntLo = wilcoxOut$conf.int[1],
+    confIntHi = wilcoxOut$conf.int[2]
+  )
+}
+# Check that test didn't fail and return non-sense (missing or funky data)
+tabWilcoxBwGrpWbf11Placebo[, success := inherits(wilcoxOut[[1]], "htest"), by = .(BIOCHEMICAL)]
+tabWilcoxBwGrpWbf11Placebo <-
+  tabWilcoxBwGrpWbf11Placebo %>% 
+  .[(success), try({extract_wi(wilcoxOut[[1]])}, silent = TRUE), 
+    by = .(BIOCHEMICAL)]
+setorder(tabWilcoxBwGrpWbf11Placebo, -pvalue)
+```
+
+## WBF-010 - Placebo
+
+```{r}
+tabWilcoxBwGrpWbf10Placebo <- NULL
+# Compute the between-group comparison WBF-011 v. Placebo
+tabWilcoxBwGrpWbf10Placebo <-
+  tabPivEventWide %>% 
+  .[(numNonMissing > 5)] %>% 
+  # .[(numNonzeroLogRatio > thresholdMinNonzeroLogRatios)] %>%
+  .[(treatment %in% c("wbf10", "placebo"))] %>% 
+  .[, .(
+    wilcoxOut = list(
+      try(expr = {
+        wilcox.test(
+          x = log2Wk12OverBaseline[(treatment == "wbf10")],
+          y = log2Wk12OverBaseline[(treatment == "placebo")],
+          alternative = "two.sided",
+          conf.int = TRUE,
+          paired = FALSE)
+      }, silent = TRUE)
+    )
+  ), 
+  by = .(BIOCHEMICAL)]
+# Extract key results from test
+extract_wi = function(wilcoxOut){
+  data.table(
+    pvalue = wilcoxOut$p.value,
+    statistic = wilcoxOut$statistic,
+    estimate = wilcoxOut$estimate,
+    confIntLo = wilcoxOut$conf.int[1],
+    confIntHi = wilcoxOut$conf.int[2]
+  )
+}
+# Check that test didn't fail and return non-sense (missing or funky data)
+tabWilcoxBwGrpWbf10Placebo[, success := inherits(wilcoxOut[[1]], "htest"), by = .(BIOCHEMICAL)]
+tabWilcoxBwGrpWbf10Placebo <-
+  tabWilcoxBwGrpWbf10Placebo %>% 
+  .[(success), try({extract_wi(wilcoxOut[[1]])}, silent = TRUE), 
+    by = .(BIOCHEMICAL)]
+setorder(tabWilcoxBwGrpWbf10Placebo, -pvalue)
+```
+
+
+## Plot: Summarize comparisons
+
+Add metabolite annotations on wilcoxon table,
+then curate key pathways to highlight in plot.
+
+```{r}
+# Curate highlights
+tabWilcoxBwGrpWbf11PlaceboAnnot <- NULL
+tabWilcoxBwGrpWbf11PlaceboAnnot <- 
+  tabMetabolonUntgtLong %>% 
+  .[, .SD[1], by = "BIOCHEMICAL"] %>% 
+  .[, .(BIOCHEMICAL, SUPER_PATHWAY, SUB_PATHWAY)] %>% 
+  .[tabWilcoxBwGrpWbf11Placebo, on = "BIOCHEMICAL", nomatch = 0] %>% 
+  copy()
+setnames(tabWilcoxBwGrpWbf11PlaceboAnnot, "estimate", "estimateBwGrp")
+setnames(tabWilcoxBwGrpWbf11PlaceboAnnot, "pvalue", "pBwGrp")
+
+# First curate key pathways to highlight
+tabWilcoxBwGrpWbf11PlaceboAnnot[, subPathway := NA_character_]
+
+## FAO - Fatty Acid Oxidation, Acyl Carnitines
+tabWilcoxBwGrpWbf11PlaceboAnnot[grep("Acyl Carnitine", SUB_PATHWAY)]$SUB_PATHWAY %>% 
+  unique() %>% sort()
+# Define key representative FAO/acylcarnitine subgroups for main plot.
+vecCuratedFaoSubpaths <-
+  c(
+    "Fatty Acid Metabolism (Acyl Carnitine, Medium Chain)",
+    "Fatty Acid Metabolism (Acyl Carnitine, Dicarboxylate)",
+    "Fatty Acid Metabolism (Acyl Carnitine, Polyunsaturated)",
+    "Fatty Acid Metabolism (Acyl Carnitine, Hydroxy)",
+    "Fatty Acid Metabolism (Acyl Carnitine, Long Chain Saturated)",
+    "Fatty Acid Metabolism (Acyl Carnitine, Monounsaturated)",
+    "Medium Chain Fatty Acid",
+    # "Fatty Acid, Monohydroxy",
+    # "Fatty Acid, Dihydroxy",
+    "Fatty Acid, Dicarboxylate",
+    "Long Chain Monounsaturated Fatty Acid",
+    "Long Chain Polyunsaturated Fatty Acid (n3 and n6)")
+tabWilcoxBwGrpWbf11PlaceboAnnot[(SUB_PATHWAY %in% vecCuratedFaoSubpaths),
+                                subPathway := "Fatty Acid Oxidation"]
+
+# Must be within lipid super-pathway
+tabWilcoxBwGrpWbf11PlaceboAnnot[(
+  subPathway == "Fatty Acid Oxidation" & 
+    SUPER_PATHWAY != "Lipid"), 
+  subPathway := NA]
+
+# This one appears to be elevated in juvenile diabetes, 
+# PMID: 2947647 DOI: 10.1002/bms.1200131004
+# But possibly derived from threonine and so not relevant to FAO.
+tabWilcoxBwGrpWbf11PlaceboAnnot["2R,3R-dihydroxybutyrate", 
+                                on = "BIOCHEMICAL", 
+                                subPathway := NA_character_]
+# Also not part of fatty acid oxidation (just look at the structure)
+# Derived from amino acid, or pyridine?
+# "Picolinoylglycine belongs to the class of organic compounds known as n-acyl-alpha amino acids..."
+# https://hmdb.ca/metabolites/HMDB0059766
+tabWilcoxBwGrpWbf11PlaceboAnnot["picolinoylglycine", 
+                                on = "BIOCHEMICAL", 
+                                subPathway := NA_character_]
+
+# BCAA
+# This group was investigated due to prior interest,
+# but the data does not support emphasizing this group
+tabWilcoxBwGrpWbf11PlaceboAnnot["Leucine, Isoleucine and Valine Metabolism", 
+                                subPathway := NA_character_, 
+                                on = "SUB_PATHWAY"]
+vecCuratedBcaaSubpaths <-
+  c("Fatty Acid Metabolism (also BCAA Metabolism)",
+    "Fatty Acid, Branched")
+tabWilcoxBwGrpWbf11PlaceboAnnot[(SUB_PATHWAY %in% vecCuratedBcaaSubpaths),
+                                subPathway := NA_character_]
+# propionylcarnitine is indicative of BCAA
+tabWilcoxBwGrpWbf11PlaceboAnnot[grep("propionylcarnitine", BIOCHEMICAL), 
+                                subPathway := NA_character_]
+
+# Data supports emphasizing tryptophan metabolites
+tabWilcoxBwGrpWbf11PlaceboAnnot["Tryptophan Metabolism" , 
+                                subPathway := "Tryptophan", 
+                                on = "SUB_PATHWAY"]
+
+# non-tryptophan aromatic amino acids.
+# This group was investigated due to prior interest,
+# but the data does not support emphasizing this group
+nonTrpAAA <- "Phe, Tyr"
+tabWilcoxBwGrpWbf11PlaceboAnnot[grep("Tyrosine", SUB_PATHWAY), 
+                                subPathway := NA_character_]
+tabWilcoxBwGrpWbf11PlaceboAnnot[grep("Phenylalanine", SUB_PATHWAY), 
+                                subPathway := NA_character_]
+
+# Omit '1-carboxyethyl' metabolites (octopines) from other subgroups,
+# where their presence is misleading wrt the pathway
+# (they are clearly their own, correlated group)
+tabWilcoxBwGrpWbf11PlaceboAnnot[grep("1-carboxyethyl", BIOCHEMICAL), 
+                                subPathway := NA_character_]
+
+grepSearchStringBilirubin <- 
+  "bilirubin|glucuronate|Urobilin|urobilinogen|stercobilin|heme|biliverdin"
+tabWilcoxBwGrpWbf11PlaceboAnnot[grep(grepSearchStringBilirubin, BIOCHEMICAL), 
+                                subPathway := "Bilirubin"]
+tabWilcoxBwGrpWbf11PlaceboAnnot[grep("Bile", SUB_PATHWAY), 
+                                subPathway := "Bile Acids"]
+
+# Define plot
+pVolcanoBwGrpWbf11PlaceboBase <- pVolcanoBwGrpWbf11Placebo <- NULL
+pVolcanoBwGrpWbf11PlaceboBase <- 
+  ggplot(
+    mapping = aes(
+      x = estimateBwGrp, 
+      y = -log10(pBwGrp)
+    )) +
+  # Horizontally center
+  geom_blank(
+    mapping = aes(x = -estimateBwGrp), 
+    data = tabWilcoxBwGrpWbf11PlaceboAnnot %>% copy() %>% 
+      .[, subPathway := NULL] %>% 
+      .[, SUB_PATHWAY := NULL]
+  ) +
+  # Volcano background cloud of all unnamed.
+  geom_point(
+    # Omit faceting variable so that these show up on every panel
+    data = tabWilcoxBwGrpWbf11PlaceboAnnot %>% copy() %>% 
+      .[, subPathway := NULL] %>% 
+      .[, SUB_PATHWAY := NULL],
+    fill = "gray",
+    color = "gray",
+    stroke = 0,
+    size = 1.5, 
+    alpha = 0.25) +
+  geom_vline(
+    xintercept = 0.0, 
+    color = "gray",
+    size = 0.25
+  ) +
+  ylab(expression(paste(-log[10](p)))) +
+  xlab("WBF-011 - Placebo") +
+  labs(color = "Metabolite\nGroup") +
+  ggtitle("Between-group comparison, wilcoxon test", 
+          "WBF-011 - placebo.") +
+  theme(
+    strip.text = element_text(size = 10),
+    strip.background = element_blank(),
+    plot.title = element_blank(),
+    plot.subtitle = element_blank(),
+    panel.grid = element_blank(),
+    axis.title.y = element_text(size = 13, angle = 0, vjust = 0.95),
+    axis.title.x = element_text(size = 13, angle = 0, vjust = 1),
+    legend.position = "none"
+  ) 
+
+vecOrderSubPaths <-
+  c("Fatty Acid Oxidation", "Bilirubin", "Bile Acids", "Tryptophan")
+thresholdAlphaEmphasisUntgt <- 0.1
+
+# Prepare plot definition
+pVolcanoBwGrpWbf11Placebo <-
+  pVolcanoBwGrpWbf11PlaceboBase +
+    # Highlight!
+  # color = subPathway
+  geom_point(
+    data = (tabWilcoxBwGrpWbf11PlaceboAnnot[!is.na(subPathway)]),
+    mapping = aes(
+      size = pBwGrp < thresholdAlphaEmphasisUntgt,
+      alpha = pBwGrp < thresholdAlphaEmphasisUntgt
+    ),
+    shape = 21,
+    color = "darkgreen",
+    fill = "darkgreen",
+    stroke = 0.1,
+    alpha = 1) +
+  scale_size_manual(values = c("TRUE" = 2, "FALSE" = 1)) +
+  scale_alpha_manual(values = c("TRUE" = 1, "FALSE" = 0.5)) +
+  facet_wrap(~factor(subPathway, levels = vecOrderSubPaths), 
+             nrow = 2,
+             drop = TRUE)
+# Peek at the FAO subgroups
+vecFaoShow <-
+  tabWilcoxBwGrpWbf11PlaceboAnnot %>% 
+  .[(subPathway == "Fatty Acid Oxidation")] %>% 
+  .$SUB_PATHWAY %>% table() %>% sort() %>% 
+  .[(. > 1)]
+pVolcanoBwGrpWbf11PlaceboBase +
+    geom_point(
+    data = (tabWilcoxBwGrpWbf11PlaceboAnnot %>% 
+              .[(subPathway == "Fatty Acid Oxidation")] %>% 
+              .[(abs(estimateBwGrp) > 0 | pBwGrp < 1)]),
+    shape = 21,
+    color = "darkgreen",
+    fill = "darkgreen",
+    stroke = 0.1,
+    size = 2, 
+    alpha = 1) +
+  facet_wrap(~factor(SUB_PATHWAY), drop = TRUE)
+
+pVolcanoBwGrpWbf11Placebo
+```
+
+Compare WBF-011 and WBF-010 in MA plot
+
+```{r}
+tabBwGrpCompare <- NULL
+tabBwGrpCompare <- 
+  tabWilcoxBwGrpWbf10Placebo %>% copy %>% 
+  setnames("estimate", "estWbf10Pbo") %>% 
+  setnames("pvalue", "pWbf10Pbo") %>% 
+  .[copy(tabWilcoxBwGrpWbf11PlaceboAnnot), on = "BIOCHEMICAL"] %>% 
+  .[, A := 0.5 * (abs(estimateBwGrp) + abs(estWbf10Pbo))] %>% 
+  .[, M := estimateBwGrp - estWbf10Pbo]
+
+# Show labels on bile acids...
+tabBwGrpCompare %>% 
+  ggplot(aes(A, M)) +
+  geom_point(size = 0.5, color = "gray") +
+  geom_point(
+    data = tabBwGrpCompare[grep("cholate", BIOCHEMICAL)],
+    color = "darkorange") +
+  ggrepel::geom_text_repel(
+    min.segment.length = 0,
+    size = 2,
+    mapping = aes(label = BIOCHEMICAL),
+    data = tabBwGrpCompare %>% 
+      .[grep("cholate", BIOCHEMICAL)] %>% 
+      .[(A > 0.4 | abs(M) > 1.0)]) +
+  # .[(A > 0.65 | abs(M) > 1.0)]) +
+  ggtitle("Between-group comparison with placebo, MA plot")
+
+# Mimic the facet panels from the main figure
+tabBwGrpCompare %>% copy %>% 
+  .[, subPathway := NULL] %>% 
+  ggplot(aes(A, M)) +
+  geom_hline(yintercept = 0.0, size = 0.2) +
+  geom_point(size = 0.5, color = "gray", stroke = 0) +
+  geom_point(
+    stroke = 0,
+    size = 1,
+    data = tabBwGrpCompare[!is.na(subPathway)],
+    color = "darkorange") +
+  facet_wrap(~subPathway) +
+  ylab("WBF-011 - WBF-010") +
+  ggtitle("Between-group comparison relative to placebo, MA plot") +
+  theme(panel.grid = element_blank())
+```
+
+Show WBF-010 in its usual color shading simultaneously.
+
+```{r fig.width=10, fig.height=7}
+pVolcanoBwGrpBothVsPlacebo <- NULL
+pVolcanoBwGrpBothVsPlacebo <-
+  pVolcanoBwGrpWbf11Placebo +
+  # Highlight!
+  geom_point(
+    data = (tabBwGrpCompare[!is.na(subPathway)]),
+    mapping = aes(
+      x = estWbf10Pbo,
+      y = -log10(pWbf10Pbo),
+      size = pWbf10Pbo < thresholdAlphaEmphasisUntgt,
+      alpha = pWbf10Pbo < thresholdAlphaEmphasisUntgt
+    ),
+    shape = 21,
+    color = "darkblue",
+    fill = "darkblue",
+    stroke = 0.1,
+    alpha = 1) +
+  facet_wrap(~factor(subPathway, levels = vecOrderSubPaths), 
+             nrow = 2,
+             drop = TRUE) +
+  xlab("Formulation - Placebo")
+pVolcanoBwGrpBothVsPlacebo
+```
+
+
+
+
+
+# Fig 3e: Select groups
+
+## Within-group log2(Week12 / Baseline)
+
+```{r}
+tabWilcoxLog2Wk12OverBaselResult <-
+  tabPivEventWide %>% 
+  # .[(numNonMissing > 0)] %>% 
+  .[, .(
+    wilcoxOut = list(
+      wilcox.test(
+        x = log2Wk12OverBaseline, 
+        alternative = "two.sided",
+        conf.int = TRUE,
+        mu = 0.0, 
+        paired = FALSE)
+    )
+  ), 
+  by = .(treatment, BIOCHEMICAL)]
+# Extract key results from test
+extract_wi = function(wilcoxOut){data.table(
+  pvalue = wilcoxOut$p.value,
+  statistic = wilcoxOut$statistic,
+  estimate = wilcoxOut$estimate,
+  confIntLo = wilcoxOut$conf.int[1],
+  confIntHi = wilcoxOut$conf.int[2]
+)}
+tabWilcoxLog2Wk12OverBaselResult <-
+  tabWilcoxLog2Wk12OverBaselResult[, extract_wi(wilcoxOut[[1]]), 
+                                   by = .(treatment, BIOCHEMICAL)]
+setnames(tabWilcoxLog2Wk12OverBaselResult, "estimate", "estimateWinGrp")
+setnames(tabWilcoxLog2Wk12OverBaselResult, "pvalue", "pWinGrp")
+```
+
+## Fig 3E, within-arm changes by metabolite group
+
+```{r fig.width=16}
+# subtract within-group C.I.s for between-group 'hits'
+tabSpecialWinGrp <- NULL
+tabSpecialWinGrp <-
+  (tabWilcoxBwGrpWbf11PlaceboAnnot %>% copy %>% 
+     .[!is.na(subPathway)] %>% 
+     # Same as emphasis threshold in Fig 3D
+     .[(pBwGrp < thresholdAlphaEmphasisUntgt)] %>%
+     .[, .(BIOCHEMICAL, subPathway, estimateBwGrp, pBwGrp)]) %>% 
+  tabWilcoxLog2Wk12OverBaselResult[., on = "BIOCHEMICAL"]
+# Improve the label for bilirubin degradation products
+tabSpecialWinGrp[, 
+                 BIOCHEMICAL := gsub(
+                   pattern = "bilirubin degradation product, ", 
+                   replacement = "bilirubin deriv. ", 
+                   BIOCHEMICAL)]
+# Define order of metabolites to help with legibility
+orderSpecialMetabs <- 
+  tabSpecialWinGrp %>% 
+  .[(treatment == "wbf11")] %>% 
+  setorder(-estimateWinGrp) %>% 
+  .$BIOCHEMICAL
+tabSpecialWinGrp[, metaboFactor := factor(BIOCHEMICAL, levels = orderSpecialMetabs)]
+# Set CI edges to Inf if they are outside of helpful-range
+tabSpecialWinGrp[(confIntLo < -1.0), confIntLo := -Inf]
+tabSpecialWinGrp[(confIntHi > 1.0), confIntHi := Inf]
+
+pSpecialWinGrp <-
+  tabSpecialWinGrp %>% copy %>% 
+  # Show the bile acids result in bile-acid figure, 
+  # omit here to save figure space
+  .[(subPathway != "Bile Acids")] %>% 
+  .[, subPathwayFac := factor(
+    x = subPathway, 
+    levels = vecOrderSubPaths[vecOrderSubPaths != "Bile Acids"])] %>% 
+  ggplot(aes(metaboFactor, estimateWinGrp, color = treatment, fill = treatment)) +
+  geom_hline(yintercept = 0.0, size = 0.1) +
+  facet_grid(cols = vars(subPathwayFac), scales = 'free', space = 'free') +
+  # Adding this has the effect of centering each panel
+  geom_blank(mapping = aes(ymin = -confIntLo, ymax = -confIntHi)) +
+  # The (within-group) log2-ratio + C.I.s
+  geom_pointrange(
+    alpha = 1.0,
+    size = 0.5,
+    fatten = 4,
+    shape = 23,
+    stroke = 0.1,
+    position = position_dodge(width = 0.6),
+    mapping = aes(ymin = confIntLo, ymax = confIntHi)
+  ) +
+  ylab(
+    expression(paste(
+      log[2](over(Endpoint,Baseline))
+    ))) +
+  scaleColorManualTreatment +
+  scaleFillManualTreatment +
+  theme(
+    legend.position = "none",
+    panel.grid = element_blank(),
+    strip.background = element_blank(),
+    axis.title.y = element_text(size = 7, angle = 0, vjust = 0.5),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(
+      size = 9,
+      angle = 30, 
+      hjust = 1, 
+      vjust = 1)
+  )
+pSpecialWinGrp
+```
+
+
+# Table: Multiple testing
+
+```{r}
+tabSummarizeMultTest <- NULL
+tabSummarizeMultTest <-
+  tabBwGrpCompare %>% copy %>% 
+  setnames("estimateBwGrp", "estWbf11Pbo") %>% 
+  setnames("pBwGrp", "pWbf11Pbo") %>% 
+  setnames("subPathway", "KeyGroup") %>% 
+  # Select for displaying in table
+  .[, .(BIOCHEMICAL, SUPER_PATHWAY, SUB_PATHWAY, KeyGroup, 
+        estWbf10Pbo, estWbf11Pbo,
+        pWbf10Pbo, pWbf11Pbo)] %>% 
+  setorder(pWbf11Pbo, pWbf10Pbo)
+
+## Show independent filtering criteria (arm-blind variance)
+# Compute variance for each metabolite (using the standardized, rescaled values)
+tabVarUntgt <-
+  tabMetabolonUntgtLong %>% 
+  .[, .(Var = var(ScaledImpData, na.rm = TRUE)), by = "BIOCHEMICAL"] %>% 
+  setorder(-Var)
+thresholdVarianceMin <- 1
+
+tabSummarizeMultTestIndFilt <- NULL
+tabSummarizeMultTestIndFilt <- 
+  tabSummarizeMultTest %>% copy %>% 
+  ## Filter to stuff worth showing
+  # minimum variance threshold
+  .[(tabVarUntgt[(Var > thresholdVarianceMin)]$BIOCHEMICAL), on = "BIOCHEMICAL"] %>% 
+  # minimum number observations for test (test failed with NA, omit)
+  .[!is.na(pWbf11Pbo)] %>% 
+  # Omit the unannotated metabolites. 
+  # Nothing to interpret. Can show them separately later.
+  .[!is.na(SUPER_PATHWAY)]
+
+# Compute group-wise significance values
+tabSummarizeMultTestIndFilt <- 
+  tabSummarizeMultTestIndFilt %>% 
+  ## Compute a group-wise p-value, using medians
+  # SUB_PATHWAY
+  .[, 
+    pSubPathWilcox := wilcox.test(
+      x = estWbf11Pbo, 
+      alternative = "two.sided")$p.value,
+    by = .(SUB_PATHWAY)] %>% 
+  # KeyGroup
+  .[!is.na(KeyGroup), 
+    pKeyGrpWilcox := wilcox.test(
+      x = estWbf11Pbo, 
+      alternative = "two.sided")$p.value, 
+    by = .(KeyGroup)] %>% 
+  .[is.na(pKeyGrpWilcox), pKeyGrpWilcox := 1.0]
+
+# Compute FDR adjustment for group-wise p-values
+tabSubPathFdr <-
+  tabSummarizeMultTestIndFilt %>% copy %>% 
+  .[, .(SUB_PATHWAY, pSubPathWilcox)] %>% 
+  # Omit the entries with small group size (another indpendent filter)
+  .[, grpSize := .N, by = .(SUB_PATHWAY)] %>% 
+  .[(grpSize > 3)] %>% 
+  .[, grpSize := NULL] %>% 
+  unique() %>% 
+  .[, gFDRSubPath := p.adjust(p = pSubPathWilcox)] %>% 
+  .[, pSubPathWilcox := NULL]
+# Append group FDR
+tabSummarizeMultTestIndFilt <-
+  tabSummarizeMultTestIndFilt %>% 
+  tabSubPathFdr[., on = "SUB_PATHWAY"]
+# Move gFDRSubPath col to the right
+tabSummarizeMultTestIndFilt$SubPathFDR <- tabSummarizeMultTestIndFilt$gFDRSubPath
+tabSummarizeMultTestIndFilt[, gFDRSubPath := NULL]
+setcolorder(tabSummarizeMultTestIndFilt, c("BIOCHEMICAL", "SUPER_PATHWAY"))
+# Render summary table into report
+tabSummarizeMultTestIndFilt %>% 
+  setorder(pSubPathWilcox, pKeyGrpWilcox, 
+           pWbf11Pbo, pWbf10Pbo) %>% 
+  DT::datatable() %>% 
+  DT::formatRound(
+    columns = c("estWbf10Pbo", "estWbf11Pbo", 
+                "pWbf10Pbo", "pWbf11Pbo",
+                "pKeyGrpWilcox", "pSubPathWilcox",
+                "SubPathFDR"), 
+    digits = 4)
+```
+
+For completeness, show the un-annotated results
+
+```{r}
+tabSummarizeMultTest %>% 
+  # Filter for unannoted results
+  .[!is.na(pWbf11Pbo)] %>% 
+  # Show only the unannotated metabolites. 
+  .[is.na(SUPER_PATHWAY)] %>% 
+  setorder(pWbf11Pbo, pWbf10Pbo) %>% 
+  # knitr::kable(digits = 3)
+  DT::datatable() %>% 
+  DT::formatRound(
+    columns = c("estWbf10Pbo", "estWbf11Pbo", "pWbf10Pbo", "pWbf11Pbo"), 
+    digits=3)
+```
+
+Show the unfiltered comparison statistics for all metabolites
+that had non-trivial detection 
+(minimum number of subjects defined above).
+
+```{r}
+tabSummarizeMultTest %>% 
+  setorder(pWbf11Pbo) %>% 
+  DT::datatable() %>% 
+  DT::formatRound(
+    columns = c("estWbf10Pbo", "estWbf11Pbo", "pWbf10Pbo", "pWbf11Pbo"), 
+    digits=4)
+```
+
+
+
+
+# Build Figure 4: Untargeted Metabolomics
+
+```{r pFig4, fig.width=6.7, fig.height=8.3}
+layout <- "
+ABC
+DDD
+DDD
+EEE
+"
+sizeAxisTitles <- 8
+sizeAxisText <- 8
+pFig4 <- NULL
+pFig4 <-
+  (pLogRatioRidges + 
+     theme(
+       plot.title = element_text(size = sizeAxisTitles),
+       axis.text.y = element_text(size = sizeAxisTitles),
+       axis.text.x = element_text(size = sizeAxisText),
+       axis.ticks.x = element_line(size = 0.5)
+     )
+  ) +
+  (pQqLogRatio +
+     theme(
+       plot.title = element_text(size = sizeAxisTitles),
+       axis.title.x = element_text(size = sizeAxisTitles),
+       axis.title.y = element_text(size = sizeAxisTitles),
+       axis.text.x = element_text(size = sizeAxisText),
+       axis.text.y = element_text(size = sizeAxisText),
+       axis.ticks.x = element_line(size = 0.5)
+     )
+  ) +
+  (pLogRatioPCA +
+     theme(
+       plot.title = element_text(size = sizeAxisTitles),
+       axis.title.x = element_text(size = sizeAxisTitles),
+       axis.title.y = element_text(size = sizeAxisTitles),
+       axis.text.x = element_blank(),
+       axis.text.y = element_blank(),
+       axis.ticks = element_blank()
+     )
+  ) +
+  (
+    pVolcanoBwGrpBothVsPlacebo + 
+      theme(
+        strip.text = element_text(size = sizeAxisTitles),
+        axis.text.x = element_text(size = sizeAxisText),
+        axis.text.y = element_text(size = sizeAxisText),
+        axis.title.x = element_text(size = sizeAxisTitles),
+        axis.title.y = element_text(
+          size = 8, 
+          angle = 0, 
+          vjust = 0.5,
+          margin = margin(r = -35, unit = "pt"))
+      )
+  ) +
+  (
+    pSpecialWinGrp + 
+      theme(
+        strip.text = element_text(size = sizeAxisTitles),
+        axis.text.y = element_text(size = sizeAxisText),
+        axis.text.x = element_text(
+          size = 6,
+          angle = 40, 
+          hjust = 1, 
+          vjust = 1),
+        axis.title.y = element_text(
+          size = 6, angle = 0, vjust = 0.5,
+          margin = margin(r = -30, unit = "pt"))
+      )
+  ) +
+  plot_annotation(tag_levels = 'a') +
+  plot_layout(design = layout) & 
+  theme(plot.tag = element_text(size = 8, face = "bold", family = "Sans"))
+# pFig4
+```
+
+```{r ggsaves}
+figHeight = 210
+ggsave("Figure-04.pdf", pFig4, 
+       device = cairo_pdf,
+       width = 170,
+       dpi = 300, 
+       height = figHeight, 
+       units = "mm")
+```
+
+
+
+# Write tidy within-group table
+
+```{r writetables}
+tabMetabolonUntgtWilcox <- 
+  (tabWilcoxBwGrpWbf11PlaceboAnnot %>% 
+     .[, .(BIOCHEMICAL, subPathway, estimateBwGrp, pBwGrp)]) %>% 
+  tabWilcoxLog2Wk12OverBaselResult[., on = "BIOCHEMICAL"] %>% 
+  copy()
+saveRDS(tabMetabolonUntgtWilcox, "../tidy_data/tabMetabolonUntgtWilcox.RDS")
+```
+
